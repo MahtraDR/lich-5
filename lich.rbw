@@ -173,7 +173,16 @@ class SynchronizedSocket
       @delegate.puts *args, &block
     }
   end
-
+  def puts_if(*args)
+    @mutex.synchronize {
+      if yield
+         @delegate.puts *args
+         return true
+       else
+          return false
+       end
+      }
+  end
   def write(*args, &block)
     @mutex.synchronize {
       @delegate.write *args, &block
