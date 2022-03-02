@@ -16,17 +16,17 @@ xmlparser.rb: Core lich file that defines the data extracted from SIMU's XML.
 =end
 
 class XMLParser
-  attr_reader :mana, :max_mana, :health, :max_health, :spirit, :max_spirit, :last_spirit,
-              :stamina, :max_stamina, :stance_text, :stance_value, :mind_text, :mind_value,
-              :prepared_spell, :encumbrance_text, :encumbrance_full_text, :encumbrance_value,
-              :indicator, :injuries, :injury_mode, :room_count, :room_title, :room_description,
-              :room_exits, :room_exits_string, :familiar_room_title, :familiar_room_description,
-              :familiar_room_exits, :bounty_task, :injury_mode, :server_time, :server_time_offset,
-              :roundtime_end, :cast_roundtime_end, :last_pulse, :level, :next_level_value,
-              :next_level_text, :society_task, :stow_container_id, :name, :game, :in_stream,
-              :player_id, :prompt, :current_target_ids, :current_target_id, :room_window_disabled,
-              :dialogs, :room_id
-  attr_accessor :send_fake_tags
+   attr_reader :mana, :max_mana, :health, :max_health, :spirit, :max_spirit, :last_spirit, 
+               :stamina, :max_stamina, :stance_text, :stance_value, :mind_text, :mind_value, 
+	       :prepared_spell, :encumbrance_text, :encumbrance_full_text, :encumbrance_value, 
+	       :indicator, :injuries, :injury_mode, :room_count, :room_title, :room_description, 
+	       :room_exits, :room_exits_string, :familiar_room_title, :familiar_room_description, 
+	       :familiar_room_exits, :bounty_task, :injury_mode, :server_time, :server_time_offset, 
+	       :roundtime_end, :cast_roundtime_end, :last_pulse, :level, :next_level_value, 
+	       :next_level_text, :society_task, :stow_container_id, :name, :game, :in_stream, 
+	       :player_id, :active_spells, :prompt, :current_target_id, :room_window_disabled,
+	       :room_objects, :concentration, :max_concentration
+   attr_accessor :send_fake_tags
 
   @@warned_deprecated_spellfront = 0
 
@@ -76,6 +76,7 @@ class XMLParser
     @room_description = String.new
     @room_exits = Array.new
     @room_exits_string = String.new
+    @room_objects = String.new
 
     @familiar_room_title = String.new
     @familiar_room_description = String.new
@@ -96,6 +97,8 @@ class XMLParser
     @last_spirit = nil
     @stamina = 0
     @max_stamina = 0
+    @concentration = 0
+    @max_concentration = 0
     @stance_text = String.new
     @stance_value = 0
     @mind_text = String.new
@@ -107,6 +110,7 @@ class XMLParser
     @indicator = Hash.new
     @injuries = { 'back' => { 'scar' => 0, 'wound' => 0 }, 'leftHand' => { 'scar' => 0, 'wound' => 0 }, 'rightHand' => { 'scar' => 0, 'wound' => 0 }, 'head' => { 'scar' => 0, 'wound' => 0 }, 'rightArm' => { 'scar' => 0, 'wound' => 0 }, 'abdomen' => { 'scar' => 0, 'wound' => 0 }, 'leftEye' => { 'scar' => 0, 'wound' => 0 }, 'leftArm' => { 'scar' => 0, 'wound' => 0 }, 'chest' => { 'scar' => 0, 'wound' => 0 }, 'leftFoot' => { 'scar' => 0, 'wound' => 0 }, 'rightFoot' => { 'scar' => 0, 'wound' => 0 }, 'rightLeg' => { 'scar' => 0, 'wound' => 0 }, 'neck' => { 'scar' => 0, 'wound' => 0 }, 'leftLeg' => { 'scar' => 0, 'wound' => 0 }, 'nsys' => { 'scar' => 0, 'wound' => 0 }, 'rightEye' => { 'scar' => 0, 'wound' => 0 } }
     @injury_mode = 0
+    @active_spells = Hash.new
 
     # psm 3.0 dialogdata updates
     @dialogs = {}
@@ -138,6 +142,10 @@ class XMLParser
     @active_ids = Array.new
     @current_stream = String.new
     @current_style = String.new
+  end
+
+  def safe_to_respond?
+    !in_stream && !@bold && (!@current_style || @current_style.empty?)
   end
 
   def make_wound_gsl
@@ -204,6 +212,8 @@ class XMLParser
         @obj_name = nil
         @obj_before_name = nil
         @obj_after_name = nil
+      elsif name == 'dialogData' and attributes['id'] == 'ActiveSpells' and attributes['clear'] == 't'
+        @active_spells.clear
       elsif name == 'dialogData' and attributes['clear'] == 't' and PSM_3_DIALOG_IDS.include?(attributes["id"])
         @dialogs[attributes["id"]] ||= {}
         @dialogs[attributes["id"]].clear
@@ -211,6 +221,8 @@ class XMLParser
         nil
       elsif name == 'nav'
         @room_id = attributes['rm'].to_i
+        $nav_seen = true
+        Map.last_seen_objects = nil
       elsif name == 'pushStream'
         @in_stream = true
         @current_stream = attributes['id'].to_s
@@ -254,8 +266,8 @@ class XMLParser
           @room_description = String.new
           GameObj.clear_room_desc
         elsif attributes['id'] == 'room extra' # DragonRealms
-          @room_count += 1
-          $room_count += 1
+          #@room_count += 1
+          #$room_count += 1
           # elsif attributes['id'] == 'sprite'
         end
       elsif name == 'clearContainer'
@@ -307,6 +319,8 @@ class XMLParser
         elsif attributes['id'] == 'encumlevel'
           @encumbrance_value = attributes['value'].to_i
           @encumbrance_text = attributes['text']
+        elsif attributes['id'] == 'concentration'
+          @concentration, @max_concentration = attributes['text'].scan(/-?\d+/).collect { |num| num.to_i }
         elsif PSM_3_DIALOG_IDS.include?(@active_ids[-2])
           # puts "kind=(%s) name=%s attributes=%s" % [@active_ids[-2], name, attributes]
           self.parse_psm3_progressbar(@active_ids[-2], attributes)
@@ -445,6 +459,11 @@ class XMLParser
         elsif @active_tags[-2] == 'dialogData' and PSM_3_DIALOG_IDS.include?(@active_ids[-2])
           # deprecated: labels do not have the required data in psm 3.0 dialogdata
           #             instead we must parse the <progressBar/> element
+        elsif @active_tags[-2] == 'dialogData' and @active_ids[-2] == 'ActiveSpells'
+          if (name = /^lbl(.+)$/.match(attributes['id']).captures.first) and (value = /^\s*([0-9\:]+)\s*$/.match(attributes['value']).captures.first)
+            hour, minute = value.split(':')
+            @active_spells[name] = Time.now + (hour.to_i * 3600) + (minute.to_i * 60)
+          end
         end
       elsif (name == 'container') and (attributes['id'] == 'stow')
         @stow_container_id = attributes['target'].sub('#', '')
@@ -470,6 +489,7 @@ class XMLParser
           end
         end
       elsif (name == 'app') and (@name = attributes['char'])
+        @game = attributes['game']
         if @game.nil? or @game.empty?
           @game = 'unknown'
         end
@@ -705,6 +725,13 @@ class XMLParser
         @room_exits.each { |exit| gsl_exits.concat(DIRMAP[SHORTDIR[exit]].to_s) }
         $_CLIENT_.puts "\034GSj#{sprintf('%-20s', gsl_exits)}\r\n"
         gsl_exits = nil
+        @room_count += 1
+        $room_count += 1
+      elsif name == 'compass' and $nav_seen
+        $nav_seen = false
+        @second_compass = true
+      elsif name == 'compass' and @second_compass
+        @second_compass = false
         @room_count += 1
         $room_count += 1
       end
