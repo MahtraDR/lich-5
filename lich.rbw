@@ -4907,7 +4907,7 @@ def do_client(client_string)
       end
     elsif cmd =~ /^(?:exec|e)(q)?(n)? (.+)$/
       cmd_data = $3
-      ExecScript.start(cmd_data, flags={ :quiet => $1, :trusted => ($2.nil? and KEEP_SAFE)  })
+      ExecScript.start(cmd_data, flags={ :quiet => $1, :trusted => ($2.nil? and RUBY_VERSION =~ /^2\.[012]\./)  })
     elsif cmd =~ /^trust\s+(.*)/i
       script_name = $1
       if RUBY_VERSION =~ /^2\.[012]\./
