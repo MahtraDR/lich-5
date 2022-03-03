@@ -24,7 +24,7 @@ class XMLParser
               :familiar_room_exits, :bounty_task, :injury_mode, :server_time, :server_time_offset,
               :roundtime_end, :cast_roundtime_end, :last_pulse, :level, :next_level_value,
               :next_level_text, :society_task, :stow_container_id, :name, :game, :in_stream,
-              :player_id, :prompt, :current_target_id, :room_window_disabled,
+              :player_id, :prompt, :current_target_ids, :current_target_id, :room_window_disabled,
               :dialogs, :roomid, :room_objects, :concentration, :max_concentration, :active_spells
   attr_accessor :send_fake_tags
 
