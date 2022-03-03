@@ -5455,7 +5455,7 @@ module Games
                       combat_count -= 1
                     end
                     if $_SERVERSTRING_.include?("<pushStream id=\"combat\" />")
-                       $_SERVERSTRING_ = $_SERVERSTRING_.gsub("<pushStream id=\"combat\" />","")
+                      $_SERVERSTRING_ = $_SERVERSTRING_.gsub("<pushStream id=\"combat\" />","")
                     end
                   end
                 end
