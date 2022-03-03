@@ -3298,7 +3298,7 @@ def move(dir = 'none', giveup_seconds = 10, giveup_lines = 30)
         dir.sub!('door', 'second door')
       end
       put_dir.call
-      elsif line =~ /^You can't go there|^You can't (?:go|swim) in that direction\.|^Where are you trying to go\?|^What were you referring to\?|^I could not find what you were referring to\.|^How do you plan to do that here\?|^You take a few steps towards|^You cannot do that\.|^You settle yourself on|^You shouldn't annoy|^You can't go to|^That's probably not a very good idea|^Maybe you should look|^You are already(?! as far away as you can get)|^You walk over to|^You step over to|The [\w\s]+ is too far away|You may not pass\.|become impassable\.|prevents you from entering\.|Please leave promptly\.|is too far above you to attempt that\.$|^Uh, yeah\.  Right\.$|^Definitely NOT a good idea\.$|^Your attempt fails|^There doesn't seem to be any way to do that at the moment\.$/
+    elsif line =~ /^You can't go there|^You can't (?:go|swim) in that direction\.|^Where are you trying to go\?|^What were you referring to\?|^I could not find what you were referring to\.|^How do you plan to do that here\?|^You take a few steps towards|^You cannot do that\.|^You settle yourself on|^You shouldn't annoy|^You can't go to|^That's probably not a very good idea|^Maybe you should look|^You are already(?! as far away as you can get)|^You walk over to|^You step over to|The [\w\s]+ is too far away|You may not pass\.|become impassable\.|prevents you from entering\.|Please leave promptly\.|is too far above you to attempt that\.$|^Uh, yeah\.  Right\.$|^Definitely NOT a good idea\.$|^Your attempt fails|^There doesn't seem to be any way to do that at the moment\.$/
       echo 'move: failed'
       fill_hands if need_full_hands
       Script.current.downstream_buffer.unshift(save_stream)
@@ -3388,17 +3388,17 @@ def move(dir = 'none', giveup_seconds = 10, giveup_lines = 30)
     elsif line =~ /will have to stand up first|must be standing first|^You'll have to get up first|^But you're already sitting!|^Shouldn't you be standing first|^Try standing up|^Perhaps you should stand up|^Standing up might help|^You should really stand up first|You can't do that while sitting|You must be standing to do that|You can't do that while lying down/
       fput 'stand'
       waitrt?
-         put_dir.call
-      elsif line == "You're still recovering from your recent cast."
-         sleep 2
-         put_dir.call
-      elsif line =~ /^The ground approaches you at an alarming rate/
-         sleep 1
-         fput 'stand' unless standing?
-         put_dir.call
-      elsif line =~ /You go flying down several feet, landing with a/
-         sleep 1
-         fput 'stand' unless standing?
+      put_dir.call
+    elsif line == "You're still recovering from your recent cast."
+      sleep 2
+      put_dir.call
+    elsif line =~ /^The ground approaches you at an alarming rate/
+      sleep 1
+      fput 'stand' unless standing?
+      put_dir.call
+    elsif line =~ /You go flying down several feet, landing with a/
+      sleep 1
+      fput 'stand' unless standing?
       put_dir.call
     elsif line =~ /^Sorry, you may only type ahead/
       sleep 1
