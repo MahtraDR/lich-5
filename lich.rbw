@@ -8154,6 +8154,11 @@ main_thread = Thread.new {
   end
 
   if @launch_data
+    if @launch_data.find { |opt| opt =~ /GAMECODE=DR/ }
+      gamecodeshort = "DR"
+    else
+      gamecodeshort = "GS"
+    end
     unless gamecode = @launch_data.find { |line| line =~ /GAMECODE=/ }
       $stdout.puts "error: launch_data contains no GAMECODE info"
       Lich.log "error: launch_data contains no GAMECODE info"
@@ -8180,18 +8185,18 @@ main_thread = Thread.new {
     elsif (RUBY_PLATFORM =~ /mingw|win/i) and (RUBY_PLATFORM !~ /darwin/i)
       Lich.log("info: Working against a Windows Platform for FE Executable")
       if @launch_data.find { |opt| opt =~ /GAME=WIZ/ }
-        custom_launch = "Wizard.Exe /GGS /H127.0.0.1 /P%port% /K%key%"
+        custom_launch = "Wizard.Exe /G#{gamecodeshort}/H127.0.0.1 /P%port% /K%key%"
       elsif @launch_data.find { |opt| opt =~ /GAME=STORM/ }
-        custom_launch = "Wrayth.exe /GGS/Hlocalhost/P%port%/K%key%" if $sf_fe_loc =~ /Wrayth/
-        custom_launch = "Stormfront.exe /GGS/Hlocalhost/P%port%/K%key%" if $sf_fe_loc =~ /STORM/
+        custom_launch = "Wrayth.exe /G#{gamecodeshort}/Hlocalhost/P%port%/K%key%" if $sf_fe_loc =~ /Wrayth/
+        custom_launch = "Stormfront.exe /G#{gamecodeshort}/Hlocalhost/P%port%/K%key%" if $sf_fe_loc =~ /STORM/
       end
     elsif defined?(Wine)
       Lich.log("info: Working against a Linux | WINE Platform")
       if @launch_data.find { |opt| opt =~ /GAME=WIZ/ }
-        custom_launch = "Wizard.Exe /GGS /H127.0.0.1 /P%port% /K%key%"
+        custom_launch = "Wizard.Exe /G#{gamecodeshort}/H127.0.0.1 /P%port% /K%key%"
       elsif @launch_data.find { |opt| opt =~ /GAME=STORM/ }
-        custom_launch = "Wrayth.exe /GGS/Hlocalhost/P%port%/K%key%" if $sf_fe_loc =~ /Wrayth/
-        custom_launch = "Stormfront.exe /GGS/Hlocalhost/P%port%/K%key%" if $sf_fe_loc =~ /STORM/
+        custom_launch = "Wrayth.exe /G#{gamecodeshort}/Hlocalhost/P%port%/K%key%" if $sf_fe_loc =~ /Wrayth/
+        custom_launch = "Stormfront.exe /G#{gamecodeshort}/Hlocalhost/P%port%/K%key%" if $sf_fe_loc =~ /STORM/
       end
     end
     if custom_launch_dir = @launch_data.find { |opt| opt =~ /CUSTOMLAUNCHDIR=/ }
