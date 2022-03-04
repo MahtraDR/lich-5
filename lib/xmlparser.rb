@@ -25,7 +25,7 @@ class XMLParser
               :roundtime_end, :cast_roundtime_end, :last_pulse, :level, :next_level_value,
               :next_level_text, :society_task, :stow_container_id, :name, :game, :in_stream,
               :player_id, :prompt, :current_target_ids, :current_target_id, :room_window_disabled,
-              :dialogs, :room_id, :room_objects, :concentration, :max_concentration, :active_spells
+              :dialogs, :room_id, :room_objects, :concentration, :max_concentration
   attr_accessor :send_fake_tags
 
   @@warned_deprecated_spellfront = 0
@@ -110,7 +110,6 @@ class XMLParser
     @indicator = Hash.new
     @injuries = { 'back' => { 'scar' => 0, 'wound' => 0 }, 'leftHand' => { 'scar' => 0, 'wound' => 0 }, 'rightHand' => { 'scar' => 0, 'wound' => 0 }, 'head' => { 'scar' => 0, 'wound' => 0 }, 'rightArm' => { 'scar' => 0, 'wound' => 0 }, 'abdomen' => { 'scar' => 0, 'wound' => 0 }, 'leftEye' => { 'scar' => 0, 'wound' => 0 }, 'leftArm' => { 'scar' => 0, 'wound' => 0 }, 'chest' => { 'scar' => 0, 'wound' => 0 }, 'leftFoot' => { 'scar' => 0, 'wound' => 0 }, 'rightFoot' => { 'scar' => 0, 'wound' => 0 }, 'rightLeg' => { 'scar' => 0, 'wound' => 0 }, 'neck' => { 'scar' => 0, 'wound' => 0 }, 'leftLeg' => { 'scar' => 0, 'wound' => 0 }, 'nsys' => { 'scar' => 0, 'wound' => 0 }, 'rightEye' => { 'scar' => 0, 'wound' => 0 } }
     @injury_mode = 0
-    @active_spells = Hash.new
 
     # psm 3.0 dialogdata updates
     @dialogs = {}
@@ -212,8 +211,6 @@ class XMLParser
         @obj_name = nil
         @obj_before_name = nil
         @obj_after_name = nil
-      elsif name == 'dialogData' and attributes['id'] == 'ActiveSpells' and attributes['clear'] == 't'
-        @active_spells.clear
       elsif name == 'dialogData' and attributes['clear'] == 't' and PSM_3_DIALOG_IDS.include?(attributes["id"])
         @dialogs[attributes["id"]] ||= {}
         @dialogs[attributes["id"]].clear
@@ -459,11 +456,6 @@ class XMLParser
         elsif @active_tags[-2] == 'dialogData' and PSM_3_DIALOG_IDS.include?(@active_ids[-2])
           # deprecated: labels do not have the required data in psm 3.0 dialogdata
           #             instead we must parse the <progressBar/> element
-        elsif @active_tags[-2] == 'dialogData' and @active_ids[-2] == 'ActiveSpells'
-          if (name = /^lbl(.+)$/.match(attributes['id']).captures.first) and (value = /^\s*([0-9\:]+)\s*$/.match(attributes['value']).captures.first)
-            hour, minute = value.split(':')
-            @active_spells[name] = Time.now + (hour.to_i * 3600) + (minute.to_i * 60)
-          end
         end
       elsif (name == 'container') and (attributes['id'] == 'stow')
         @stow_container_id = attributes['target'].sub('#', '')
