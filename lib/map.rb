@@ -24,21 +24,18 @@ class Map
   attr_reader :id
   attr_accessor :title, :description, :paths, :uid, :location, :climate, :terrain, :wayto, :timeto, :image, :image_coords, :tags, :check_location, :unique_loot, :uid, :room_objects
   def initialize(id, title, description, paths, uid = [], location=nil, climate=nil, terrain=nil, wayto={}, timeto={}, image=nil, image_coords=nil, tags=[], check_location=nil, unique_loot=nil, room_objects=nil)
-
     @id, @title, @description, @paths, @uid, @location, @climate, @terrain, @wayto, @timeto, @image, @image_coords, @tags, @check_location, @unique_loot = id, title, description, paths, uid, location, climate, terrain, wayto, timeto, image, image_coords, tags, check_location, unique_loot
     @@list[@id] = self
   end
   def outside?
     @paths.first =~ /Obvious paths:/
   end
-
   def Map.last_seen_objects=(val)
     @@last_seen_objects = val
   end
   def Map.last_seen_objects
     @@last_seen_objects
   end
-
   def to_i
     @id
   end
@@ -193,7 +190,6 @@ class Map
                       (r.unique_loot.nil? or (r.unique_loot.to_a - GameObj.loot.to_a.collect { |obj| obj.name }).empty?) and
                       (foggy_exits or r.paths.include?(XMLData.room_exits_string.strip) or r.tags.include?('random-paths') and
                       (r.room_objects.nil? || r.room_objects.all?{|obj| /\b#{obj}\b/ =~ Map.last_seen_objects } ) )
-
                     )
                     room = r
                     @@previous_room_id = @@current_room_id
@@ -208,7 +204,6 @@ class Map
                   (foggy_exits or r.paths.include?(XMLData.room_exits_string.strip) or r.tags.include?('random-paths')) and
                   (not r.check_location or r.location == Map.get_location) and check_peer_tag.call(r) and
                   (r.room_objects.nil? || r.room_objects.all?{|obj| /\b#{obj}\b/ =~ Map.last_seen_objects } )
-
                 }
                 redo unless @@current_room_count == XMLData.room_count
                 @@previous_room_id = @@current_room_id
@@ -223,7 +218,6 @@ class Map
                     (r.unique_loot.nil? or (r.unique_loot.to_a - GameObj.loot.to_a.collect { |obj| obj.name }).empty?) and 
                     (not r.check_location or r.location == Map.get_location) and check_peer_tag.call(r) and
                     (r.room_objects.nil? || r.room_objects.all?{|obj| /\b#{obj}\b/ =~ Map.last_seen_objects } )
-
                   }
                   redo unless @@current_room_count == XMLData.room_count
                   @@previous_room_id = @@current_room_id
@@ -269,7 +263,6 @@ class Map
                      (r.unique_loot.nil? or (r.unique_loot.to_a - GameObj.loot.to_a.collect { |obj| obj.name }).empty?) and
                      (foggy_exits or r.paths.include?(XMLData.room_exits_string.strip) or r.tags.include?('random-paths')) and
                      (r.room_objects.nil? || r.room_objects.all?{|obj| /\b#{obj}\b/ =~ Map.last_seen_objects } )
-
                     )
                   )
                   room = r
@@ -286,7 +279,6 @@ class Map
                 (foggy_exits or r.paths.include?(XMLData.room_exits_string.strip) or r.tags.include?('random-paths')) and 
                 (not r.check_location or r.location == Map.get_location) and
                 (r.room_objects.nil? || r.room_objects.all?{|obj| /\b#{obj}\b/ =~ Map.last_seen_objects } )
-
               })
               redo unless @@fuzzy_room_count == XMLData.room_count
               if room.tags.any? { |tag| tag =~ /^(set desc on; )?peer [a-z]+ =~ \/.+\/$/ }
@@ -305,7 +297,6 @@ class Map
                   (r.unique_loot.nil? or (r.unique_loot.to_a - GameObj.loot.to_a.collect { |obj| obj.name }).empty?) and 
                   (not r.check_location or r.location == Map.get_location) and
                   (r.room_objects.nil? || r.room_objects.all?{|obj| /\b#{obj}\b/ =~ Map.last_seen_objects } )
-
                 }
                 redo unless @@fuzzy_room_count == XMLData.room_count
                 if room.tags.any? { |tag| tag =~ /^(set desc on; )?peer [a-z]+ =~ \/.+\/$/ }
@@ -381,7 +372,6 @@ class Map
       }
       current_location = Map.get_location
       foggy_exits = (XMLData.room_exits_string =~ /^Obvious (?:exits|paths): obscured by a thick fog$/)
-
       shortlist = [] + Map.ids_from_uid(XMLData.room_id)
       if shortlist.size > 0
         shortlist.each { |s|
