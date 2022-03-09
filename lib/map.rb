@@ -648,7 +648,6 @@ class Map
             if current_tag == 'tag'
               room['tags'].push(text_string)
             elsif current_tag =~ /^(?:title|description|paths|unique_loot|room_objects)$/
-
               room[current_tag].push(text_string)
             elsif current_tag =~ /^(?:uid)$/
               room[current_tag].push(text_string.to_i)
