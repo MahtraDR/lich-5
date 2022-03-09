@@ -633,7 +633,6 @@ class Map
               room['unique_loot'] = Array.new
               room['uid'] = Array.new
               room['room_objects'] = Array.new
-
             elsif element =~ /^(?:image|tsoran)$/ and attributes['name'] and attributes['x'] and attributes['y'] and attributes['size']
               room['image'] = attributes['name']
               room['image_coords'] = [ (attributes['x'].to_i - (attributes['size']/2.0).round), (attributes['y'].to_i - (attributes['size']/2.0).round), (attributes['x'].to_i + (attributes['size']/2.0).round), (attributes['y'].to_i + (attributes['size']/2.0).round) ]
@@ -671,7 +670,6 @@ class Map
               room['unique_loot'] = nil if room['unique_loot'].empty?
               room['room_objects'] = nil if room['room_objects'].empty?
               Map.new(room['id'], room['title'], room['description'], room['paths'], room['uid'], room['location'], room['climate'], room['terrain'], room['wayto'], room['timeto'], room['image'], room['image_coords'], room['tags'], room['check_location'], room['unique_loot'], room['room_objects'])
-
             elsif element == 'map'
               missing_end = false
             end
@@ -838,7 +836,6 @@ class Map
             room.uid.each { |u| file.write "      <uid>#{u}</uid>\n" }
             room.unique_loot.to_a.each { |loot| file.write "      <unique_loot>#{loot.gsub(/(<|>|"|'|&)/) { escape[$1] }}</unique_loot>\n" }
             room.room_objects.to_a.each { |loot| file.write "      <room_objects>#{loot.gsub(/(<|>|"|'|&)/) { escape[$1] }}</room_objects>\n" }
-
             file.write "      <image name=\"#{room.image.gsub(/(<|>|"|'|&)/) { escape[$1] }}\" coords=\"#{room.image_coords.join(',')}\" />\n" if room.image and room.image_coords
             room.wayto.keys.each { |target|
               if room.timeto[target].class == Proc
