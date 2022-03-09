@@ -26,7 +26,6 @@ class XMLParser
               :next_level_text, :society_task, :stow_container_id, :name, :game, :in_stream,
               :player_id, :prompt, :current_target_ids, :current_target_id, :room_window_disabled,
               :dialogs, :room_id, :previous_nav_rm, :room_objects, :concentration, :max_concentration
-
   attr_accessor :send_fake_tags
 
   @@warned_deprecated_spellfront = 0
