@@ -4544,6 +4544,15 @@ module Games
                 $_SERVERBUFFER_.push($_SERVERSTRING_)
                 if alt_string = DownstreamHook.run($_SERVERSTRING_)
                   #                           Buffer.update(alt_string, Buffer::DOWNSTREAM_MOD)
+                  if alt_string =~ /<resource picture=.*roomName/
+                    if (Lich.display_lichid =~ /on|true|yes/ && Lich.display_uid =~ /on|true|yes/) || (Lich.display_lichid.nil? && Lich.display_uid.nil?) #default on
+                      alt_string.sub!(']') { " - #{Room.current.id}] (u#{XMLData.room_id})" }
+                    elsif Lich.display_lichid =~ /on|true|yes/ || Lich.display_lichid.nil? # don't force an entry
+                      alt_string.sub!(']') { " - #{Room.current.id}]" }
+                    elsif Lich.display_uid =~ /on|true|yes/ || Lich.display_uid.nil? # don't force an entry
+                      alt_string.sub!(']') { "] (u#{XMLData.room_id})" }
+                    end
+                  end
                   if $_DETACHABLE_CLIENT_
                     begin
                       $_DETACHABLE_CLIENT_.write(alt_string)
@@ -4553,15 +4562,6 @@ module Games
                       respond "--- Lich: error: client_thread: #{$!}"
                       respond $!.backtrace.first
                       Lich.log "error: client_thread: #{$!}\n\t#{$!.backtrace.join("\n\t")}"
-                    end
-                  end
-                  if alt_string =~ /<resource picture=.*roomName/
-                    if (Lich.display_lichid =~ /on|true|yes/ && Lich.display_uid =~ /on|true|yes/) || (Lich.display_lichid.nil? && Lich.display_uid.nil?) #default on
-                      alt_string.sub!(']') { " - #{Room.current.id}] (u#{XMLData.room_id})" }
-                    elsif Lich.display_lichid =~ /on|true|yes/ || Lich.display_lichid.nil? # don't force an entry
-                      alt_string.sub!(']') { " - #{Room.current.id}]" }
-                    elsif Lich.display_uid =~ /on|true|yes/ || Lich.display_uid.nil? # don't force an entry
-                      alt_string.sub!(']') { "] (u#{XMLData.room_id})" }
                     end
                   end
                   if $frontend =~ /^(?:wizard|avalon)$/
