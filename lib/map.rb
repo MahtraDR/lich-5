@@ -182,9 +182,7 @@ class Map
             1.times {
               @@current_room_count = XMLData.room_count
               foggy_exits = (XMLData.room_exits_string =~ /^Obvious (?:exits|paths): obscured by a thick fog$/)
-
               shortlist = Map.ids_from_uid(XMLData.room_id)
-
               if shortlist.size > 0
                 shortlist.each { |s|
                   r = @@list[s]
