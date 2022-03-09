@@ -25,7 +25,7 @@ class XMLParser
               :roundtime_end, :cast_roundtime_end, :last_pulse, :level, :next_level_value,
               :next_level_text, :society_task, :stow_container_id, :name, :game, :in_stream,
               :player_id, :prompt, :current_target_ids, :current_target_id, :room_window_disabled,
-              :dialogs, :room_id, :room_objects, :concentration, :max_concentration
+              :dialogs, :room_id, :previous_nav_rm, :room_objects, :concentration, :max_concentration
   attr_accessor :send_fake_tags
 
   @@warned_deprecated_spellfront = 0
@@ -116,9 +116,10 @@ class XMLParser
 
     # real id updates
     @room_id = nil
+    @previous_nav_rm = nil
   end
 
-  # for backwards compatability
+  # for backwards compatibility
   def active_spells
     z = {}
     XMLData.dialogs.sort.each do |a, b|
@@ -127,9 +128,9 @@ class XMLParser
         when /Active Spells|Buffs/
           z.merge!(k => v) if k.instance_of?(String)
         when /Cooldowns/
-          z.merge!("CD - #{k}" => v) if k.instance_of?(String)
+          z.merge!("#{k}" => v) if k.instance_of?(String)
         when /Debuffs/
-          z.merge!("DB - #{k}" => v) if k.instance_of?(String)
+          z.merge!("#{k}" => v) if k.instance_of?(String)
         end
       end
     end
@@ -217,6 +218,7 @@ class XMLParser
       elsif name == 'resource'
         nil
       elsif name == 'nav'
+        @previous_nav_rm = @room_id
         @room_id = attributes['rm'].to_i
         $nav_seen = true
         Map.last_seen_objects = nil
@@ -321,6 +323,8 @@ class XMLParser
         elsif PSM_3_DIALOG_IDS.include?(@active_ids[-2])
           # puts "kind=(%s) name=%s attributes=%s" % [@active_ids[-2], name, attributes]
           self.parse_psm3_progressbar(@active_ids[-2], attributes)
+          # since we received an updated spell duration, let's signal infomon to update
+          $process_legacy_spell_durations = true
         end
       elsif name == 'roundTime'
         @roundtime_end = attributes['value'].to_i

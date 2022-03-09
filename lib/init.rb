@@ -168,7 +168,7 @@ end
 
 ## The following should be deprecated with the direct-frontend-launch-method
 ## TODO: remove as part of chore/Remove unnecessary Win32 calls
-#=begin
+## =begin
 if (RUBY_PLATFORM =~ /mingw|win/i) and (RUBY_PLATFORM !~ /darwin/i)
   #
   # Windows API made slightly less annoying
@@ -592,7 +592,7 @@ else
   $wine_bin = nil
   $wine_prefix = nil
 end
-#=end
+##=end
 if ARGV[0] == 'shellexecute'
   args = Marshal.load(ARGV[1].unpack('m')[0])
   Win32.ShellExecute(:lpOperation => args[:op], :lpFile => args[:file], :lpDirectory => args[:dir], :lpParameters => args[:params])
