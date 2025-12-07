@@ -423,17 +423,48 @@ module Lich
         return unless DRCI.get_item_if_not_held?(item)
 
         if worn_trashcan
-          case DRC.bput("put my #{item} in my #{worn_trashcan}", DROP_TRASH_RETRY_PATTERNS, DROP_TRASH_SUCCESS_PATTERNS, DROP_TRASH_FAILURE_PATTERNS, /^Perhaps you should be holding that first/)
-          when /^Perhaps you should be holding that first/
-            return (DRCI.get_item?(item) && DRCI.dispose_trash(item, worn_trashcan, worn_trashcan_verb))
-          when *DROP_TRASH_RETRY_PATTERNS
-            return DRCI.dispose_trash(item, worn_trashcan, worn_trashcan_verb)
+          case DRC.bput("put my #{item} in my #{worn_trashcan}", DROP_TRASH_SUCCESS_PATTERNS, DROP_TRASH_FAILURE_PATTERNS, DROP_TRASH_RETRY_PATTERNS, /^Perhaps you should be holding that first/)
           when *DROP_TRASH_SUCCESS_PATTERNS
             if worn_trashcan_verb
               DRC.bput("#{worn_trashcan_verb} my #{worn_trashcan}", *WORN_TRASHCAN_VERB_PATTERNS)
               DRC.bput("#{worn_trashcan_verb} my #{worn_trashcan}", *WORN_TRASHCAN_VERB_PATTERNS)
             end
             return true
+          when *DROP_TRASH_FAILURE_PATTERNS
+            # NOOP, try next trashcan option
+          when *DROP_TRASH_RETRY_PATTERNS
+            return DRCI.dispose_trash(item, worn_trashcan, worn_trashcan_verb)
+          when /^Perhaps you should be holding that first/
+            return (DRCI.get_item?(item) && DRCI.dispose_trash(item, worn_trashcan, worn_trashcan_verb))
+          end
+        end
+
+        # Check for meta:trashcan tag on the room to identify a specific trashcan to use.
+        if Room.current.tags.find { |t| t =~ /meta:trashcan:(.*)/ }
+          metatag_trashcan = Regexp.last_match(1)
+
+          # Gelapod needs special handling since you feed it, and it disappears in winter
+          metatag_trash_command = nil
+          if metatag_trashcan == 'gelapod'
+            metatag_trash_command = "feed my #{item} to gelapod" if DRRoom.room_objs.include?('gelapod')
+          else
+            metatag_trash_command = "put my #{item} in #{metatag_trashcan}"
+          end
+
+          # gelapod is not here - probably winter move on to next attempt to get rid of
+          unless metatag_trash_command.nil?
+            case DRC.bput(metatag_trash_command, DROP_TRASH_SUCCESS_PATTERNS, DROP_TRASH_FAILURE_PATTERNS, DROP_TRASH_RETRY_PATTERNS, /^Perhaps you should be holding that first/)
+            when *DROP_TRASH_SUCCESS_PATTERNS
+              return true
+            when *DROP_TRASH_FAILURE_PATTERNS
+              # NOOP, try next trashcan option
+            when *DROP_TRASH_RETRY_PATTERNS
+              # If still didn't dispose of trash after retry
+              # then don't return yet, will try to drop it later.
+              return dispose_trash(item)
+            when /^Perhaps you should be holding that first/
+              return (DRCI.get_item?(item) && DRCI.dispose_trash(item))
+            end
           end
         end
 
@@ -474,26 +505,31 @@ module Lich
           trash_command = "put my #{item} in #{trashcan}" unless trashcan == 'gelapod'
 
           case DRC.bput(trash_command, DROP_TRASH_SUCCESS_PATTERNS, DROP_TRASH_FAILURE_PATTERNS, DROP_TRASH_RETRY_PATTERNS, /^Perhaps you should be holding that first/)
-          when /^Perhaps you should be holding that first/
-            return (DRCI.get_item?(item) && DRCI.dispose_trash(item))
+          when *DROP_TRASH_SUCCESS_PATTERNS
+            return true
+          when *DROP_TRASH_FAILURE_PATTERNS
+            # NOOP, try next trashcan option
           when *DROP_TRASH_RETRY_PATTERNS
             # If still didn't dispose of trash after retry
             # then don't return yet, will try to drop it later.
             return true if dispose_trash(item)
-          when *DROP_TRASH_SUCCESS_PATTERNS
-            return true
+          when /^Perhaps you should be holding that first/
+            return (DRCI.get_item?(item) && DRCI.dispose_trash(item))
           end
         end
 
         # No trash bins or not able to put item in a bin, just drop it.
         case DRC.bput("drop my #{item}", DROP_TRASH_SUCCESS_PATTERNS, DROP_TRASH_FAILURE_PATTERNS, DROP_TRASH_RETRY_PATTERNS, /^Perhaps you should be holding that first/, /^But you aren't holding that/)
-        when /^Perhaps you should be holding that first/, /^But you aren't holding that/
-          return (DRCI.get_item?(item) && DRCI.dispose_trash(item))
-        when *DROP_TRASH_RETRY_PATTERNS
-          return dispose_trash(item)
         when *DROP_TRASH_SUCCESS_PATTERNS
           return true
+        when *DROP_TRASH_FAILURE_PATTERNS
+          return false
+        when *DROP_TRASH_RETRY_PATTERNS
+          return dispose_trash(item)
+        when /^Perhaps you should be holding that first/, /^But you aren't holding that/
+          return (DRCI.get_item?(item) && DRCI.dispose_trash(item))
         else
+          # failure of match patterns in the bput, but still need to return a value
           return false
         end
       end
@@ -501,6 +537,26 @@ module Lich
       #########################################
       # SEARCH FOR ITEM
       #########################################
+
+      def normalize_item_text(item)
+        return nil unless item
+        unless ((item !~ /^my /i) && (item !~ /^#/))
+          item = "#{item}"
+        else
+          item = "my #{item}"
+        end
+        return item
+      end
+
+      def normalize_container_text(container)
+        return nil unless container
+        unless ((container !~ /^((in|on|under|behind|from) )?my /i) && (container !~ /^#/))
+          container = "#{container}"
+        else
+          container = "my #{container}"
+        end
+        return container
+      end
 
       def search?(item)
         /(?:An?|Some) .+ is (?:in|being)/ =~ DRC.bput("inv search #{item}", /^You can't seem to find anything/, /(?:An?|Some) .+ is (?:in|being)/)
@@ -531,9 +587,11 @@ module Lich
       def tap(item, container = nil)
         return nil unless item
 
+        item = normalize_item_text(item)
+        container = normalize_container_text(container)
         from = container
         from = "from #{container}" if container && !(container =~ /^(in|on|under|behind|from) /i)
-        DRC.bput("tap my #{item} #{from}", *TAP_SUCCESS_PATTERNS, *TAP_FAILURE_PATTERNS)
+        DRC.bput("tap #{item} #{from}", *TAP_SUCCESS_PATTERNS, *TAP_FAILURE_PATTERNS)
       end
 
       def in_hands?(item)
@@ -660,7 +718,8 @@ module Lich
 
       # Takes in the noun of the configured necro material stacker, and returns the current material item count.
       def count_necro_stacker(necro_stacker)
-        DRC.bput("study my #{necro_stacker}", /currently holds \d+ items/).scan(/\d+/).first.to_i
+        necro_stacker = normalize_item_text(necro_stacker)
+        DRC.bput("study #{necro_stacker}", /currently holds \d+ items/).scan(/\d+/).first.to_i
       end
 
       def count_all_boxes(settings)
@@ -741,8 +800,8 @@ module Lich
       # Same as 'get_item_unsafe' but ensures that
       # the container argument is prefixed with 'my' qualifier.
       def get_item_safe?(item, container = nil)
-        item = "my #{item}" if item && !(item =~ /^my /i)
-        container = "my #{container}" if container && !(container =~ /^((in|on|under|behind|from) )?my /i)
+        item = normalize_item_text(item)
+        container = normalize_container_text(container)
         get_item_unsafe(item, container)
       end
 
@@ -790,7 +849,8 @@ module Lich
 
       def tie_item?(item, container = nil)
         place = container ? "to my #{container}" : nil
-        case DRC.bput("tie my #{item} #{place}", TIE_ITEM_SUCCESS_PATTERNS, TIE_ITEM_FAILURE_PATTERNS)
+        item = normalize_item_text(item)
+        case DRC.bput("tie #{item} #{place}", TIE_ITEM_SUCCESS_PATTERNS, TIE_ITEM_FAILURE_PATTERNS)
         when *TIE_ITEM_SUCCESS_PATTERNS
           true
         else
@@ -800,7 +860,8 @@ module Lich
 
       def untie_item?(item, container = nil)
         place = container ? "from my #{container}" : nil
-        case DRC.bput("untie my #{item} #{place}", UNTIE_ITEM_SUCCESS_PATTERNS, UNTIE_ITEM_FAILURE_PATTERNS)
+        item = normalize_item_text(item)
+        case DRC.bput("untie #{item} #{place}", UNTIE_ITEM_SUCCESS_PATTERNS, UNTIE_ITEM_FAILURE_PATTERNS)
         when *UNTIE_ITEM_SUCCESS_PATTERNS
           true
         else
@@ -820,7 +881,7 @@ module Lich
       # Same as 'wear_item_unsafe?' but ensures that
       # the item name is prefixed with 'my' qualifier.
       def wear_item_safe?(item)
-        item = "my #{item}" if item && !(item =~ /^my /i)
+        item = normalize_item_text(item)
         wear_item_unsafe?(item)
       end
 
@@ -846,7 +907,7 @@ module Lich
       # Same as 'remove_item_unsafe?' but ensures that
       # the item name is prefixed with 'my' qualifier.
       def remove_item_safe?(item)
-        item = "my #{item}" if item && !(item =~ /^my /i)
+        item = normalize_item_text(item)
         remove_item_unsafe?(item)
       end
 
@@ -874,7 +935,7 @@ module Lich
       # Same as 'stow_item_unsafe?' but ensures that
       # the item argument is prefixed with 'my '.
       def stow_item_safe?(item)
-        item = "my #{item}" if item && !(item =~ /^my /i)
+        item = normalize_item_text(item)
         stow_item_unsafe?(item)
       end
 
@@ -1011,7 +1072,7 @@ module Lich
       # Returns a list (empty or otherwise) if able to look in the container.
       # Returns nil if unable to determine if container's contents (e.g. can't open it or look in it).
       def look_in_container(container)
-        container = "my #{container}" unless container.nil? || container =~ /^my /i
+        container = normalize_container_text(container)
         contents = DRC.bput("look in #{container}", CONTAINER_IS_CLOSED_PATTERNS, RUMMAGE_SUCCESS_PATTERNS, RUMMAGE_FAILURE_PATTERNS)
         case contents
         when *RUMMAGE_FAILURE_PATTERNS
@@ -1048,8 +1109,8 @@ module Lich
       # Same as 'put_away_item_unsafe?' but ensures that
       # the container argument is prefixed with 'my' qualifier.
       def put_away_item_safe?(item, container = nil)
-        item = "my #{item}" if item && !(item =~ /^my /i)
-        container = "my #{container}" unless container.nil? || container =~ /^my /i
+        item = normalize_item_text(item)
+        container = normalize_container_text(container)
         put_away_item_unsafe?(item, container)
       end
 
@@ -1102,7 +1163,8 @@ module Lich
       #########################################
 
       def give_item?(target, item = nil)
-        command = item ? "give my #{item} to #{target}" : "give #{target}"
+        item = normalize_item_text(item)
+        command = item ? "give #{item} to #{target}" : "give #{target}"
         case DRC.bput(command, { 'timeout' => 35 }, /GIVE it again/, /give it to me again/, /^You don't need to specify the object/, /already has an outstanding offer/, GIVE_ITEM_SUCCESS_PATTERNS, GIVE_ITEM_FAILURE_PATTERNS)
         when *GIVE_ITEM_SUCCESS_PATTERNS
           true
