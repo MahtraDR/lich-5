@@ -1,6 +1,8 @@
 require 'rspec'
 
-# Mock dependencies
+# Mock dependencies in the correct namespace so stubs work
+# whether this spec runs in isolation or with the full suite
+# (other specs may load the real common.rb / common-items.rb).
 
 class NilClass
   def method_missing(*)
@@ -8,28 +10,34 @@ class NilClass
   end
 end
 
-module DRC
-  def self.bput(*_args)
-    nil
-  end
-end
+module Lich
+  module DragonRealms
+    module DRC
+      def self.bput(*_args)
+        nil
+      end
+    end unless defined?(Lich::DragonRealms::DRC)
 
-module DRCI
-  def self.get_item?(*_args)
-    true
-  end
+    module DRCI
+      def self.get_item?(*_args)
+        true
+      end
 
-  def self.put_away_item?(*_args)
-    true
-  end
+      def self.put_away_item?(*_args)
+        true
+      end
 
-  def self.dispose_trash(*_args)
-    nil
+      def self.dispose_trash(*_args)
+        nil
+      end
+    end unless defined?(Lich::DragonRealms::DRCI)
   end
 end
 
 require 'dragonrealms/commons/common-crafting'
 
+DRC  = Lich::DragonRealms::DRC
+DRCI = Lich::DragonRealms::DRCI
 DRCC = Lich::DragonRealms::DRCC
 
 describe DRCC do
@@ -42,27 +50,24 @@ describe DRCC do
       allow(DRCI).to receive(:get_item?).and_return(true)
       allow(DRCI).to receive(:put_away_item?).and_return(true)
       allow(DRCI).to receive(:dispose_trash)
+      allow(DRC).to receive(:bput).and_return('You notate the')
     end
 
     context 'when bundle succeeds' do
       it 'gets logbook, bundles item, and puts logbook away' do
-        allow(DRC).to receive(:bput).and_return('You notate the')
-
         expect(DRCI).to receive(:get_item?).with('outfitting logbook').ordered
         expect(DRC).to receive(:bput).with('bundle my rucksack with my logbook',
                                            'You notate the',
                                            'This work order has expired',
                                            'The work order requires items of a higher quality',
                                            "That isn't the correct type of item for this work order.",
-                                           'You need to be holding').ordered
+                                           'You need to be holding').and_return('You notate the').ordered
         expect(DRCI).to receive(:put_away_item?).with('outfitting logbook', 'duffel bag').and_return(true).ordered
 
         DRCC.logbook_item(logbook, noun, container)
       end
 
       it 'does not dispose of the item' do
-        allow(DRC).to receive(:bput).and_return('You notate the')
-
         expect(DRCI).not_to receive(:dispose_trash)
 
         DRCC.logbook_item(logbook, noun, container)
@@ -122,11 +127,10 @@ describe DRCC do
       end
 
       it 'does not retry bundle if item cannot be retrieved' do
-        allow(DRC).to receive(:bput).and_return('You need to be holding')
         allow(DRCI).to receive(:get_item?).with('outfitting logbook').and_return(true)
         allow(DRCI).to receive(:get_item?).with('rucksack', 'duffel bag').and_return(false)
 
-        expect(DRC).to receive(:bput).once
+        expect(DRC).to receive(:bput).once.and_return('You need to be holding')
 
         DRCC.logbook_item(logbook, noun, container)
       end
@@ -158,7 +162,6 @@ describe DRCC do
 
     context 'when putting logbook away' do
       it 'falls back to plain stow if container put fails' do
-        allow(DRC).to receive(:bput).and_return('You notate the')
         allow(DRCI).to receive(:get_item?).with('outfitting logbook').and_return(true)
         allow(DRCI).to receive(:put_away_item?).with('outfitting logbook', 'duffel bag').and_return(false)
         allow(DRCI).to receive(:put_away_item?).with('outfitting logbook').and_return(true)
@@ -170,7 +173,6 @@ describe DRCC do
       end
 
       it 'does not call plain stow if container put succeeds' do
-        allow(DRC).to receive(:bput).and_return('You notate the')
         allow(DRCI).to receive(:get_item?).with('outfitting logbook').and_return(true)
         allow(DRCI).to receive(:put_away_item?).with('outfitting logbook', 'duffel bag').and_return(true)
 
