@@ -6,6 +6,8 @@ require 'rspec'
 LIB_DIR = File.join(File.expand_path('../../../..', __dir__), 'lib') unless defined?(LIB_DIR)
 
 # Mock Lich::Messaging before loading the module under test
+# Always reopen and define methods (no `unless defined?` guard) because
+# games_spec.rb may define Lich::Messaging first without msg/messages/clear_messages!.
 module Lich
   module Messaging
     @messages = []
@@ -25,7 +27,7 @@ module Lich
       end
     end
   end
-end unless defined?(Lich::Messaging)
+end
 
 # Mock DRC (module) — common.rb
 module Lich

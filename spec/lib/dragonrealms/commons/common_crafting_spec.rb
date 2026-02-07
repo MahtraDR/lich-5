@@ -1,38 +1,61 @@
+# frozen_string_literal: true
+
 require 'rspec'
 
-# Mock dependencies
+# Setup load path (standalone spec, no spec_helper dependency)
+LIB_DIR = File.join(File.expand_path('../../../..', __dir__), 'lib') unless defined?(LIB_DIR)
 
+# Mock dependencies — NilClass method_missing returns nil (matches lich-5 monkey-patch)
 class NilClass
   def method_missing(*)
     nil
   end
 end
 
-module DRC
-  def self.bput(*_args)
-    nil
+# Mock DRC (module) — define in full namespace so code inside Lich::DragonRealms resolves correctly
+module Lich
+  module DragonRealms
+    module DRC
+      module_function
+
+      def bput(*_args)
+        nil
+      end
+    end
   end
-end
+end unless defined?(Lich::DragonRealms::DRC)
 
-module DRCI
-  def self.get_item?(*_args)
-    true
+DRC = Lich::DragonRealms::DRC unless defined?(DRC)
+
+# Mock DRCI (module) — define in full namespace
+module Lich
+  module DragonRealms
+    module DRCI
+      module_function
+
+      def get_item?(*_args)
+        true
+      end
+
+      def put_away_item?(*_args)
+        true
+      end
+
+      def dispose_trash(*_args)
+        nil
+      end
+    end
   end
+end unless defined?(Lich::DragonRealms::DRCI)
 
-  def self.put_away_item?(*_args)
-    true
-  end
+DRCI = Lich::DragonRealms::DRCI unless defined?(DRCI)
 
-  def self.dispose_trash(*_args)
-    nil
-  end
-end
+# Load the module under test
+require File.join(LIB_DIR, 'dragonrealms', 'commons', 'common-crafting.rb')
 
-require 'dragonrealms/commons/common-crafting'
+DRCC = Lich::DragonRealms::DRCC unless defined?(DRCC)
 
-DRCC = Lich::DragonRealms::DRCC
-
-describe DRCC do
+RSpec.describe DRCC do
   describe '.logbook_item' do
     let(:logbook) { 'outfitting' }
     let(:noun) { 'rucksack' }
