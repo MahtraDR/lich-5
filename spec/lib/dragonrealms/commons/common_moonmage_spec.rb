@@ -1,13 +1,16 @@
 # frozen_string_literal: true
 
 require 'rspec'
+require 'ostruct'
 
 # Setup load path (standalone spec, no spec_helper dependency)
 LIB_DIR = File.join(File.expand_path('../../../..', __dir__), 'lib') unless defined?(LIB_DIR)
 
-# Mock Lich::Messaging before loading the module under test
-# Always reopen and define methods (no `unless defined?` guard) because
-# games_spec.rb may define Lich::Messaging first without msg/messages/clear_messages!.
+# Ensure Lich::DragonRealms namespace exists
+module Lich; module DragonRealms; end; end
+
+# Mock Lich::Messaging — always reopen (no guard) because other specs
+# may define Lich::Messaging without msg/messages/clear_messages!.
 module Lich
   module Messaging
     @messages = []
@@ -38,98 +41,82 @@ module Lich
   end
 end unless defined?(Lich::Util)
 
-# Mock DRC (module) — common.rb
-module Lich
-  module DragonRealms
-    module DRC
-      module_function
-
-      def bput(_command, *_patterns)
-        nil
-      end
-
-      def right_hand
-        nil
-      end
-
-      def left_hand
-        nil
-      end
-
-      def message(_msg); end
-
-      def fix_standing; end
-    end
+# ── Mock DRC ──────────────────────────────────────────────────────────
+# Define at top level first (crafting spec does the same), then alias
+# into Lich::DragonRealms so code inside the namespace resolves correctly.
+module DRC
+  def self.bput(_command, *_patterns)
+    nil
   end
-end unless defined?(Lich::DragonRealms::DRC)
 
-DRC = Lich::DragonRealms::DRC unless defined?(DRC)
-
-# Mock DRCI (module) — common-items.rb
-module Lich
-  module DragonRealms
-    module DRCI
-      module_function
-
-      def in_hands?(_item)
-        false
-      end
-
-      def get_item?(_item, _container = nil)
-        true
-      end
-
-      def put_away_item?(_item, _container = nil)
-        true
-      end
-
-      def tie_item?(_item, _container = nil)
-        true
-      end
-
-      def untie_item?(_item, _container = nil)
-        true
-      end
-
-      def wear_item?(_item)
-        true
-      end
-
-      def remove_item?(_item)
-        true
-      end
-
-      def put_away_item_unsafe?(_item, _container = nil, _preposition = 'in')
-        true
-      end
-
-      def dispose_trash(_item, _container = nil, _verb = nil); end
-    end
+  def self.right_hand
+    nil
   end
-end unless defined?(Lich::DragonRealms::DRCI)
 
-DRCI = Lich::DragonRealms::DRCI unless defined?(DRCI)
-
-# Mock DRStats (module)
-module Lich
-  module DragonRealms
-    module DRStats
-      module_function
-
-      def moon_mage?
-        false
-      end
-
-      def trader?
-        false
-      end
-    end
+  def self.left_hand
+    nil
   end
-end unless defined?(Lich::DragonRealms::DRStats)
 
-DRStats = Lich::DragonRealms::DRStats unless defined?(DRStats)
+  def self.message(_msg); end
 
-# Mock UserVars for moon data
+  def self.fix_standing; end
+end unless defined?(DRC)
+
+Lich::DragonRealms::DRC = DRC unless defined?(Lich::DragonRealms::DRC)
+
+# ── Mock DRCI ─────────────────────────────────────────────────────────
+module DRCI
+  def self.in_hands?(_item)
+    false
+  end
+
+  def self.get_item?(_item, _container = nil)
+    true
+  end
+
+  def self.put_away_item?(_item, _container = nil)
+    true
+  end
+
+  def self.tie_item?(_item, _container = nil)
+    true
+  end
+
+  def self.untie_item?(_item, _container = nil)
+    true
+  end
+
+  def self.wear_item?(_item)
+    true
+  end
+
+  def self.remove_item?(_item)
+    true
+  end
+
+  def self.put_away_item_unsafe?(_item, _container = nil, _preposition = 'in')
+    true
+  end
+
+  def self.dispose_trash(_item, _container = nil, _verb = nil); end
+end unless defined?(DRCI)
+
+Lich::DragonRealms::DRCI = DRCI unless defined?(Lich::DragonRealms::DRCI)
+
+# ── Mock DRStats ──────────────────────────────────────────────────────
+module DRStats
+  def self.moon_mage?
+    false
+  end
+
+  def self.trader?
+    false
+  end
+end unless defined?(DRStats)
+
+Lich::DragonRealms::DRStats = DRStats unless defined?(Lich::DragonRealms::DRStats)
+
+# ── Mock UserVars ─────────────────────────────────────────────────────
 module UserVars
   @moons = {}
   @sun = {}
@@ -142,8 +129,11 @@ end unless defined?(UserVars)
 # Stub game helper methods
 module Kernel
   def pause(_seconds = nil); end
+
   def waitrt?; end
+
   def echo(_msg); end
+
   def fput(_cmd); end
 
   def get_data(_key)
@@ -151,14 +141,12 @@ module Kernel
   end
 end
 
-require 'ostruct'
-
 # Load the module under test
 require File.join(LIB_DIR, 'dragonrealms', 'commons', 'common-moonmage.rb')
 
 DRCMM = Lich::DragonRealms::DRCMM unless defined?(DRCMM)
 
-RSpec.describe DRCMM do
+RSpec.describe Lich::DragonRealms::DRCMM do
   before(:each) do
     Lich::Messaging.clear_messages!
   end
