@@ -92,27 +92,55 @@ DRC_MOCK_GAME_OBJ = Class.new do
   end
 end
 
+# Always reopen Script to add attributes/methods needed by common.rb tests.
+# Other specs may define Script first (spec_helper.rb has a minimal version),
+# so we augment rather than replace to avoid cross-spec failures.
 class Script
   attr_accessor :paused, :no_pause_all, :name
 
-  def self.running; []; end
-  def self.running?(_name); false; end
-  def self.exists?(_name); true; end
-  def self.current; nil; end
-  def self.self; OpenStruct.new(name: 'test'); end
   def paused?; @paused || false; end
-end unless defined?(Script)
 
-module UserVars
-  @vars = {}
+  # Only define class methods if they don't exist (spec_helper.rb may have its own)
   class << self
-    def method_missing(name, *args)
-      name.to_s.end_with?('=') ? @vars[name.to_s.chomp('=')] = args.first : @vars[name.to_s]
-    end
+    def running
+      []
+    end unless method_defined?(:running)
 
-    def respond_to_missing?(_name, _include_private = false); true; end
+    def running?(_name)
+      false
+    end unless method_defined?(:running?)
+
+    def exists?(_name)
+      true
+    end unless method_defined?(:exists?)
+
+    def current
+      nil
+    end unless method_defined?(:current)
+
+    def self
+      OpenStruct.new(name: 'test')
+    end unless method_defined?(:self)
   end
-end unless defined?(UserVars)
+end
+
+# UserVars mock — add method_missing for dynamic attribute access.
+# Other specs may define UserVars as a class with specific attr_accessors (e.g., immune_list),
+# so we always reopen and add method_missing if not already present.
+class UserVars
+  class << self
+    @vars = {}
+
+    unless method_defined?(:method_missing)
+      def method_missing(name, *args)
+        @vars ||= {}
+        name.to_s.end_with?('=') ? @vars[name.to_s.chomp('=')] = args.first : @vars[name.to_s]
+      end
+
+      def respond_to_missing?(_name, _include_private = false); true; end
+    end
+  end
+end
 
 $HOMETOWN_REGEX_MAP = {
   "Crossing" => /^(cross(ing)?)$/i, "Riverhaven" => /^(river|haven|riverhaven)$/i,
@@ -144,9 +172,10 @@ module Frontend
 end unless defined?(Frontend)
 
 # Mock XMLData for log_window
-module XMLData
-  def self.server_time; Time.at(1234567890); end
-end unless defined?(XMLData)
+# XMLData may be a module (from this file) or OpenStruct (from spec_helper.rb).
+# Always add server_time if missing, using define_singleton_method to work with both.
+module XMLData; end unless defined?(XMLData)
+XMLData.define_singleton_method(:server_time) { Time.at(1234567890) } unless XMLData.respond_to?(:server_time)
 $pause_all_lock = Mutex.new unless defined?($pause_all_lock)
 $safe_pause_lock = Mutex.new unless defined?($safe_pause_lock)
 
@@ -170,7 +199,8 @@ module Kernel
   def stunned?; false; end
   def webbed?; false; end
   def start_script(_name, _args = [], _flags = {}); nil; end
-  def get_data(_key); OpenStruct.new(spell_data: {}); end
+  # Only define get_data if not already defined by other specs (e.g., crafting spec has specific data)
+  def get_data(_key); OpenStruct.new(spell_data: {}); end unless private_method_defined?(:get_data)
   def _respond(*_args); end
   def custom_require; proc { |_name| nil }; end
 end
@@ -990,7 +1020,11 @@ RSpec.describe Lich::DragonRealms::DRC do
       allow(DRCI).to receive(:wear_item?).and_return(true)
       allow(DRCI).to receive(:stow_item?).and_return(true)
       allow(described_class).to receive(:stop_playing)
-      allow(described_class).to receive(:bput).and_return('not in need of cleaning')
+      # Mock bput to return loop-exiting responses:
+      # - 'not in need of drying' exits the wipe loop immediately
+      # - 'not in need of cleaning' exits the clean loop
+      allow(described_class).to receive(:bput).with(/wipe my/, any_args).and_return('not in need of drying')
+      allow(described_class).to receive(:bput).with(/clean my/, any_args).and_return('not in need of cleaning')
       allow(described_class).to receive(:waitrt?)
       allow(described_class).to receive(:pause)
       allow(described_class).to receive(:fix_standing)
