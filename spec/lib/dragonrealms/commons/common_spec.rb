@@ -165,9 +165,10 @@ module Frontend
 end unless defined?(Frontend)
 
 # Mock XMLData for log_window
-module XMLData
-  def self.server_time; Time.at(1234567890); end
-end unless defined?(XMLData)
+# XMLData may be a module (from this file) or OpenStruct (from spec_helper.rb).
+# Always add server_time if missing, using define_singleton_method to work with both.
+module XMLData; end unless defined?(XMLData)
+XMLData.define_singleton_method(:server_time) { Time.at(1234567890) } unless XMLData.respond_to?(:server_time)
 $pause_all_lock = Mutex.new unless defined?($pause_all_lock)
 $safe_pause_lock = Mutex.new unless defined?($safe_pause_lock)
 
