@@ -92,16 +92,37 @@ DRC_MOCK_GAME_OBJ = Class.new do
   end
 end
 
+# Always reopen Script to add attributes/methods needed by common.rb tests.
+# Other specs may define Script first (spec_helper.rb has a minimal version),
+# so we augment rather than replace to avoid cross-spec failures.
 class Script
   attr_accessor :paused, :no_pause_all, :name
 
-  def self.running; []; end
-  def self.running?(_name); false; end
-  def self.exists?(_name); true; end
-  def self.current; nil; end
-  def self.self; OpenStruct.new(name: 'test'); end
   def paused?; @paused || false; end
-end unless defined?(Script)
+
+  # Only define class methods if they don't exist (spec_helper.rb may have its own)
+  class << self
+    def running
+      []
+    end unless method_defined?(:running)
+
+    def running?(_name)
+      false
+    end unless method_defined?(:running?)
+
+    def exists?(_name)
+      true
+    end unless method_defined?(:exists?)
+
+    def current
+      nil
+    end unless method_defined?(:current)
+
+    def self
+      OpenStruct.new(name: 'test')
+    end unless method_defined?(:self)
+  end
+end
 
 module UserVars
   @vars = {}
