@@ -990,7 +990,22 @@ RSpec.describe Lich::DragonRealms::DRC do
       allow(DRCI).to receive(:wear_item?).and_return(true)
       allow(DRCI).to receive(:stow_item?).and_return(true)
       allow(described_class).to receive(:stop_playing)
-      allow(described_class).to receive(:bput).and_return('not in need of cleaning')
+      # clean_instrument has 3 bput calls:
+      # 1. "wipe my ... with my ..." -> 'not in need of drying' breaks outer loop
+      # 2. "wring my ..." -> 'you wring a dry' breaks inner loop (skipped if wipe returns 'not in need of drying')
+      # 3. "clean my ... with my ..." -> 'not in need of cleaning' breaks final loop
+      allow(described_class).to receive(:bput) do |cmd, *_patterns|
+        case cmd
+        when /^wipe my/
+          'not in need of drying'
+        when /^clean my/
+          'not in need of cleaning'
+        when /^wring my/
+          'you wring a dry'
+        else
+          'Roundtime'
+        end
+      end
       allow(described_class).to receive(:waitrt?)
       allow(described_class).to receive(:pause)
       allow(described_class).to receive(:fix_standing)
