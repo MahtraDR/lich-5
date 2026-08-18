@@ -77,6 +77,7 @@ module Lich
           variables: variables,
           args: @vars,
           ignore_warnings: true,
+          include_loader: method(:load_include),
           game: LichGamePort.new,
           input: LichInputPort.new(self),
           echo: ->(text) { respond(text) },
@@ -87,6 +88,21 @@ module Lich
       end
 
       private
+
+      # Resolve an `include <name>` against the Lich scripts dir (and custom/),
+      # trying a `.cmd` extension when none is given. Returns the file's source or nil.
+      def load_include(name)
+        candidates = name.include?('.') ? [name] : [name, "#{name}.cmd"]
+        dirs = [SCRIPT_DIR, File.join(SCRIPT_DIR, 'custom')]
+        candidates.each do |candidate|
+          dirs.each do |dir|
+            path = File.join(dir, candidate)
+            return File.read(path) if File.exist?(path)
+          end
+        end
+        respond "--- Lich: genie include not found: #{name}"
+        nil
+      end
 
       def read_source(file_name)
         begin
@@ -133,21 +149,35 @@ module Lich
       end
     end
 
-    # Resolves Genie reserved global variables from Lich's XMLData. Prototype map;
-    # extend to Genie's full reserved set as needed.
+    # Resolves Genie reserved global variables from Lich's XMLData (+ clock). Covers
+    # the common set the real scripts use; extend as needed. `$roomplayers` needs
+    # GameObj and is deferred.
     class LichGameState
       RESOLVERS = {
-        'health'        => -> { XMLData.health },
-        'mana'          => -> { XMLData.mana },
-        'stamina'       => -> { XMLData.stamina },
-        'spirit'        => -> { XMLData.spirit },
-        'concentration' => -> { XMLData.concentration },
-        'roundtime'     => -> { XMLData.roundtime },
-        'name'          => -> { XMLData.name },
-        'charactername' => -> { XMLData.name },
-        'game'          => -> { XMLData.game },
-        'roomtitle'     => -> { XMLData.room_title },
-        'roomdesc'      => -> { XMLData.room_description }
+        'health'           => -> { XMLData.health },
+        'mana'             => -> { XMLData.mana },
+        'stamina'          => -> { XMLData.stamina },
+        'spirit'           => -> { XMLData.spirit },
+        'concentration'    => -> { XMLData.concentration },
+        'maxhealth'        => -> { XMLData.max_health },
+        'maxmana'          => -> { XMLData.max_mana },
+        'maxstamina'       => -> { XMLData.max_stamina },
+        'maxspirit'        => -> { XMLData.max_spirit },
+        'maxconcentration' => -> { XMLData.max_concentration },
+        'name'             => -> { XMLData.name },
+        'charactername'    => -> { XMLData.name },
+        'game'             => -> { XMLData.game },
+        'level'            => -> { XMLData.level },
+        'stance'           => -> { XMLData.stance_text },
+        'encumbrance'      => -> { XMLData.encumbrance_text },
+        'preparedspell'    => -> { XMLData.prepared_spell },
+        'roomname'         => -> { s = XMLData.room_name.to_s; s.empty? ? XMLData.room_title : s },
+        'roomtitle'        => -> { XMLData.room_title },
+        'roomdesc'         => -> { XMLData.room_description },
+        'roomexits'        => -> { XMLData.room_exits_string },
+        'inside'           => -> { XMLData.room_inside ? 1 : 0 },
+        'roundtime'        => -> { [XMLData.roundtime_end.to_i - Time.now.to_i, 0].max },
+        'unixtime'         => -> { Time.now.to_i }
       }.freeze
 
       def key?(name)

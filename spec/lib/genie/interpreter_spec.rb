@@ -33,7 +33,7 @@ end
 # End-to-end tests: real Genie scripts compiled and run through the full pipeline
 # (Lexer -> Interpreter -> Substitution/Eval/MathCalc) against fake ports.
 RSpec.describe Lich::Genie::Interpreter do
-  def run_script(source, input_lines: [])
+  def run_script(source, input_lines: [], game_state: nil, include_loader: nil)
     clock = [0.0]
     game = FakeGame.new
     echoes = []
@@ -44,6 +44,8 @@ RSpec.describe Lich::Genie::Interpreter do
     Lich::Genie::Engine.run(
       source,
       name: 'test',
+      game_state: game_state,
+      include_loader: include_loader,
       game: game,
       input: FakeInput.new(input_lines, clock),
       echo: ->(text) { echoes << text },
@@ -161,6 +163,31 @@ RSpec.describe Lich::Genie::Interpreter do
       # The removed action must NOT fire, so %flag stays undefined (literal).
       result = run_script(source, input_lines: ['you feel woozy suddenly'])
       expect(result[:echoes]).to eq(['flag is %flag'])
+    end
+  end
+
+  describe 'reserved game-state globals' do
+    it 'resolves $globals from the injected game state' do
+      source = <<~GENIE
+        echo hp is $health at $roomname
+        exit
+      GENIE
+      result = run_script(source, game_state: { 'health' => '75', 'roomname' => 'Town Square' })
+      expect(result[:echoes]).to eq(['hp is 75 at Town Square'])
+    end
+  end
+
+  describe 'include' do
+    it 'loads a helper file and gosubs into its label across files' do
+      source = <<~GENIE
+        gosub greetlib Sun
+        echo back
+        exit
+        include lib.cmd
+      GENIE
+      loader = ->(name) { name == 'lib.cmd' ? "greetlib:\necho hi $1\nreturn" : nil }
+      result = run_script(source, include_loader: loader)
+      expect(result[:echoes]).to eq(['hi Sun', 'back'])
     end
   end
 

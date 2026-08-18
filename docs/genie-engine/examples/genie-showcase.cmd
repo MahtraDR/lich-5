@@ -85,6 +85,15 @@ roomseen2:
 echo   room matched via matchre!
 donelook:
 echo
+echo -- reserved game-state globals (live from the game) --
+echo   unix time : $unixtime
+echo   health    : $health
+echo   room      : $roomname
+echo
+echo -- include: a helper .cmd loaded at compile time, called via gosub --
+gosub libgreet Traveler
+echo   libloaded flag is now %libloaded
+echo
 echo -- timing --
 pause 1
 echo   after a 1s pause, the script timer reads @timer@ s
@@ -95,3 +104,4 @@ exit
 greet:
 echo   Hello, $1! Welcome to the Genie engine.
 return
+include genie-showcase-lib.cmd
