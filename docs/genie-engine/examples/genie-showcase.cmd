@@ -4,7 +4,7 @@ echo   run started at @time@
 echo ==========================================================
 timer start
 echo
-echo -- string variables and eval() functions --
+echo -- variables and eval() string functions --
 setvariable target You have 42 silver coins
 echo   target      : %target
 eval loud toupper("%target")
@@ -20,13 +20,14 @@ echo   matched?    : %matched   (captured number = $1)
 echo
 echo -- arrays --
 setvariable spells fire|ice|lightning|earth
-echo   I know %spells.length spells; spell #2 is %spells(2)
+echo   %spells.length spells; spell #2 is %spells(2)
 echo
-echo -- arithmetic via evalmath() (note: ^ is left-assoc) --
+echo -- math verb and evalmath() (note: ^ is left-assoc) --
+var gold 100
+math gold add 55
+echo   math: 100 + 55 = %gold
 evalmath hyp sqrt(3^2 + 4^2)
-echo   sqrt(3^2 + 4^2) = %hyp
-evalmath biggest max(7, 42, 19)
-echo   max(7,42,19)    = %biggest
+echo   evalmath: sqrt(3^2 + 4^2) = %hyp
 echo
 echo -- fibonacci loop (labels + counter + evalmath) --
 setvariable a 0
@@ -42,11 +43,17 @@ if %c >= 10 then goto fibdone
 goto fib
 fibdone:
 echo
-echo -- conditionals + random --
+echo -- block if / else --
 random 1 6
 echo   rolled %r on a d6
-if %r >= 5 then echo     high roll!
-if %r <= 2 then echo     low roll!
+if %r >= 4 then
+{
+  echo     high roll (>= 4)
+}
+else
+{
+  echo     low roll (< 4)
+}
 echo
 echo -- subroutine with an argument --
 gosub greet Elanthia
@@ -58,11 +65,31 @@ echo   global variable mode is now '$mode'
 put #highlight cyan Genie
 echo   (emitted a genieHook to highlight 'Genie' for hook-aware front-ends)
 echo
+echo -- async action (register + remove) --
+action var sensed 1 when you feel a strange sensation
+echo   registered an action (fires on 'you feel a strange sensation')
+action remove you feel a strange sensation
+echo   removed the action
+echo
+echo -- live round-trip: put + match / matchre + matchwait --
+put look
+match roomseen Obvious
+matchre roomseen2 (?i)obvious
+matchwait 3
+echo   (no room line within 3s -- fine for this demo)
+goto donelook
+roomseen:
+echo   room matched via match!
+goto donelook
+roomseen2:
+echo   room matched via matchre!
+donelook:
+echo
 echo -- timing --
 pause 1
 echo   after a 1s pause, the script timer reads @timer@ s
 echo ==========================================================
-echo   showcase complete -- Genie scripts run natively in Lich
+echo   showcase complete -- every verb these scripts use, live in Lich
 echo ==========================================================
 exit
 greet:

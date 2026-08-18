@@ -475,12 +475,36 @@ module Lich
 
       def do_action(raw)
         text = raw.strip
-        return (@actions = []) if text.downcase == 'clear'
+        keyword = Text.keyword_string(text).downcase
+        instant = false
+
+        case keyword
+        when 'clear'
+          @actions = []
+          return
+        when 'remove'
+          removed = Text.argument_string(text).strip
+          @actions.reject! { |action| action[:source] == removed }
+          return
+        when 'add'
+          text = Text.argument_string(text)
+        when 'instant'
+          instant = true
+          text = Text.argument_string(text)
+        end
+
+        return if text.start_with?('(') # (class) on/off toggle -- deferred (front-end gating)
 
         commands, trigger = text.split(/\s+when\s+/i, 2)
         return if trigger.nil? || trigger.empty?
 
-        @actions << { trigger: Regexp.new(trigger), commands: commands, active: true }
+        begin
+          regex = Regexp.new(trigger)
+        rescue RegexpError
+          echo_line("[Genie: invalid action trigger regex: #{trigger}]")
+          return
+        end
+        @actions << { trigger: regex, source: trigger, commands: commands, active: true, instant: instant }
       end
 
       def fire_actions(line)

@@ -123,14 +123,22 @@ RSpec.describe Lich::Genie::Lexer do
     end
   end
 
+  describe 'comments' do
+    it 'skips lines beginning with # (Genie comment char)' do
+      program = compile(['# a comment', 'echo hi', '   # indented comment', 'put go'])
+      expect(functions(program)).to eq([:echo, :put])
+    end
+  end
+
   describe 'unknown commands' do
     it 'raises by default' do
       expect { compile(['frobnicate x']) }.to raise_error(Lich::Genie::Error)
     end
 
-    it 'skips when warnings are ignored' do
+    it 'skips and records a warning when warnings are ignored' do
       program = compile(['frobnicate x', 'echo ok'], ignore_warnings: true)
       expect(functions(program)).to eq([:echo])
+      expect(program.warnings.map { |w| w[:content] }).to eq(['frobnicate x'])
     end
   end
 end

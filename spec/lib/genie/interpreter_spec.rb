@@ -148,6 +148,20 @@ RSpec.describe Lich::Genie::Interpreter do
       result = run_script(source, input_lines: ['you are bleeding badly'])
       expect(result[:commands]).to eq(['flee'])
     end
+
+    it 'stops firing a trigger after action remove (spellbook pattern)' do
+      source = <<~GENIE
+        action var flag 1 when you feel woozy
+        action remove you feel woozy
+        match ok all clear
+        matchwait 1
+        echo flag is %flag
+        exit
+      GENIE
+      # The removed action must NOT fire, so %flag stays undefined (literal).
+      result = run_script(source, input_lines: ['you feel woozy suddenly'])
+      expect(result[:echoes]).to eq(['flag is %flag'])
+    end
   end
 
   describe 'front-end hooks' do

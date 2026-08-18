@@ -7,8 +7,9 @@ module Lich
     # AddLabel. See docs/genie-engine/interpreter-spec.md sections 2.1 and 6.
     #
     # Faithful behaviors preserved:
-    #   * blank lines are skipped; there is NO comment character -- an unknown
-    #     keyword raises unless warnings are ignored.
+    #   * blank lines are skipped; a leading '#' marks a comment line (skipped, as
+    #     Genie does in its file reader). An unknown keyword raises unless warnings
+    #     are ignored.
     #   * a line beginning with `%` becomes `setvariable ...` and one beginning
     #     with `$` becomes `put #var ...` (a leading ` = ` collapses to a space).
     #   * `if <c> then <cmd>` / `while <c> do <cmd>` split into a block-opening line
@@ -27,7 +28,8 @@ module Lich
       # @!attribute instructions [Array<Instruction>]
       # @!attribute labels [Hash{String=>Integer}] lowercased label name => index
       # @!attribute files [Array<String>] file id => name
-      Program = Struct.new(:instructions, :labels, :files)
+      # @!attribute warnings [Array<Hash>] unknown lines collected during compile
+      Program = Struct.new(:instructions, :labels, :files, :warnings)
 
       # Genie's non-ASCII inline-newline sentinel (built via an ASCII-producing
       # escape so the source stays ASCII-only).
@@ -77,13 +79,14 @@ module Lich
         @instructions = []
         @labels = {}
         @files = []
+        @warnings = []
       end
 
       # @return [Program]
       def compile(lines, file_name)
         file_id = add_file(file_name)
         Array(lines).each_with_index { |raw, i| append_line(raw, file_id, i + 1) }
-        Program.new(@instructions, @labels, @files)
+        Program.new(@instructions, @labels, @files, @warnings)
       end
 
       private
@@ -101,7 +104,8 @@ module Lich
       def append_line(raw, file_id, file_row)
         raw.to_s.split(MULTILINE_SEP).each do |part|
           row = part.strip
-          next if row.empty? # blank lines skipped; no comment character exists
+          next if row.empty? # blank lines skipped
+          next if row.start_with?('#') # Genie treats a leading '#' as a comment (LoadFile)
 
           process_row(row, file_id, file_row)
         end
@@ -178,6 +182,7 @@ module Lich
         when :blockend
           split_prefixed(argument, '}', argument.strip, file_id, file_row)
         when :unknown
+          @warnings << { file_id: file_id, file_row: file_row, content: row }
           raise Error, "Unknown script command: #{row}" unless @ignore_warnings
 
           true
