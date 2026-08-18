@@ -58,6 +58,7 @@ module Lich
         @label_order = ['~start']
         @labels = { '~start' => '' }
         @current_label = '~start'
+        @thread_group = ThreadGroup.new
         @genie_source = read_source(file_name)
       end
       # rubocop:enable Lint/MissingSuper
