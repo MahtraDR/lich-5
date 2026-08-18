@@ -34,7 +34,7 @@ module Lich
       # @param clock [#call]
       # @param specials [Specials]
       def initialize(program:, variables:, name: 'genie', args: [], game: nil, input: nil,
-                     echo: nil, hooks: nil, clock: nil, specials: Specials.new)
+                     echo: nil, hooks: nil, clock: nil, specials: nil)
         @program = program
         @vars = variables
         @name = name
@@ -43,8 +43,11 @@ module Lich
         @echo = echo || ->(_text) {}
         @hooks = hooks
         @clock = clock || -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }
+        @timer_start = nil
         @call_stack = CallStack.new
-        @substitution = Substitution.new(variables: @vars, specials: specials)
+        # Wire @timer@ to this interpreter's script timer unless a custom Specials given.
+        resolved_specials = specials || Specials.new(timer_elapsed: -> { @timer_start ? now - @timer_start : 0 })
+        @substitution = Substitution.new(variables: @vars, specials: resolved_specials)
         @eval = Eval.new(globals: GlobalsAdapter.new(@vars))
         @state = :running
         @match_list = []
