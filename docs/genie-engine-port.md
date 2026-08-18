@@ -88,6 +88,23 @@ Genie splits cleanly into two command namespaces, which map onto our two target 
    (identical for the solo-client case). Other front-end effects (highlights, windows, gauges,
    sounds, macros, colors) remain `<genieHook>` emissions per Decision 3.
 
+7. **Variable storage tiers + scopes.** Source finding: Genie persists globals to the
+   *global* `Config\variables.cfg` (`Globals.cs:716`), so `#var` globals are **account-wide /
+   cross-character**, not per-profile. Mapping:
+   - `%local` (`setvariable`) -> per-script in-memory (done).
+   - `#tvar` -> session in-memory, cross-script (per character session).
+   - `#var` -> **account-wide persistent**, isolated `genie` namespace in `lich.db3`
+     (cross-character; matches Genie's global variables.cfg). Survives restart.
+   - `#svar` -> **emulated** as the same account-wide persistent tier (true server sync later).
+   - reserved (`$health`, ...) -> live from `XMLData`, read-only.
+   Two bridges: (a) **multi-character** is the default (one account-wide store shared across all
+   character sessions via the shared `lich.db3`); (b) **Lich<->Genie** is an opt-in mirror between
+   the `genie` namespace and `UserVars` (bridging account-wide <-> current-character scope).
+   Implementation note: Lich `Vars`/`UserVars` are per-character, so the persistent tier needs a
+   NEW account-scoped store in `lich.db3` (a marshaled `genie` hash under a non-character key).
+   Globals are shared across concurrent Genie scripts via a per-character `GlobalStore`
+   (module-level), replacing the current per-interpreter in-memory global Hash.
+
 ## Target architecture
 
 ```
