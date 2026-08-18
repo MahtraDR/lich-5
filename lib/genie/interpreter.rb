@@ -225,8 +225,11 @@ module Lich
         argument = Text.argument_string(body)
 
         case keyword
-        when 'var', 'setvar', 'setvariable', 'variable', 'tvar', 'svar', 'tempvar', 'servervar'
-          @vars.global_set(Text.keyword_string(argument), Text.argument_string(argument))
+        when 'var', 'setvar', 'setvariable', 'variable', 'svar', 'servervar'
+          # #var/#svar persist to variables.cfg; #svar is emulated as persistent for now.
+          @vars.global_set(Text.keyword_string(argument), Text.argument_string(argument), persist: true)
+        when 'tvar', 'tempvar'
+          @vars.global_set(Text.keyword_string(argument), Text.argument_string(argument), persist: false)
         when 'unvar', 'unsetvar', 'unsetvariable', 'unvariable'
           @vars.global_delete(argument.strip)
         when 'echo'

@@ -66,7 +66,9 @@ module Lich
       # Thread body: run the Genie interpreter wired to Lich.
       # @return [void]
       def run_genie
-        variables = Variables.new(game_state: LichGameState.new)
+        # Shared, per-character global store backed by GenieProfiles/Config/variables.cfg,
+        # so #var/#svar persist and are visible across concurrent Genie scripts + characters.
+        variables = Variables.new(game_state: LichGameState.new, global_store: Lich::Genie.global_store)
         variables.local_set('scriptname', @name)
 
         interpreter = Engine.build(

@@ -88,22 +88,34 @@ Genie splits cleanly into two command namespaces, which map onto our two target 
    (identical for the solo-client case). Other front-end effects (highlights, windows, gauges,
    sounds, macros, colors) remain `<genieHook>` emissions per Decision 3.
 
-7. **Variable storage tiers + scopes.** Source finding: Genie persists globals to the
-   *global* `Config\variables.cfg` (`Globals.cs:716`), so `#var` globals are **account-wide /
-   cross-character**, not per-profile. Mapping:
-   - `%local` (`setvariable`) -> per-script in-memory (done).
-   - `#tvar` -> session in-memory, cross-script (per character session).
-   - `#var` -> **account-wide persistent**, isolated `genie` namespace in `lich.db3`
-     (cross-character; matches Genie's global variables.cfg). Survives restart.
-   - `#svar` -> **emulated** as the same account-wide persistent tier (true server sync later).
+7. **Persistence = Genie's own config files (NOT the Lich DB).** We reuse Genie's whole model:
+   a Genie-style `Config/` directory is the source of truth. `variables.cfg` is lines of
+   `#var {key} {value}` (parsed by `Utility.ParseArgs`, already ported as `Text.parse_args`;
+   `#var` writes lines, `#tvar` does not -- matches Genie's `bSaveToFile`). This gives
+   **zero-migration** (drop in an existing Genie `Config/`), faithful scope (the shared file IS
+   the account-wide/cross-character store, matching Genie's global `variables.cfg`), and one
+   parser that later also feeds the front-end hook layer (highlights/macros/aliases/gags/subs/
+   presets/classes/names all use the same `#command {args}` line format).
+   - `%local` -> per-script in-memory (done).
+   - `#tvar` -> session in-memory, cross-script (not written to file).
+   - `#var` -> in-memory + persisted to `Config/variables.cfg` (account-wide, cross-character).
+   - `#svar` -> emulated as persistent (variables.cfg or a sibling file); server sync later.
    - reserved (`$health`, ...) -> live from `XMLData`, read-only.
-   Two bridges: (a) **multi-character** is the default (one account-wide store shared across all
-   character sessions via the shared `lich.db3`); (b) **Lich<->Genie** is an opt-in mirror between
-   the `genie` namespace and `UserVars` (bridging account-wide <-> current-character scope).
-   Implementation note: Lich `Vars`/`UserVars` are per-character, so the persistent tier needs a
-   NEW account-scoped store in `lich.db3` (a marshaled `genie` hash under a non-character key).
-   Globals are shared across concurrent Genie scripts via a per-character `GlobalStore`
-   (module-level), replacing the current per-interpreter in-memory global Hash.
+   Bridges: **multi-character** is the default (shared `Config/` dir). **Lich<->Genie** stays an
+   opt-in mirror to `UserVars` (now lower priority; Genie config is self-contained).
+   Config-dir location: a Lich setting `Lich::Genie.config_dir` (default
+   `<SCRIPT_DIR>/GenieProfiles`), mirroring Genie's structure:
+   - `GenieProfiles/Config/variables.cfg` -> account-wide globals (matches Genie's hardcoded
+     global `Config/variables.cfg`).
+   - `GenieProfiles/Config/*.cfg` -> shared front-end model (highlights/macros/... later).
+   - `GenieProfiles/<game>-<char>/*.cfg` -> per-character profile overrides (later; matches
+     Genie's per-profile ConfigDir for everything except variables).
+   Genie's split: `variables.cfg` is always account-wide; all other `.cfg` are per-profile
+   (per-character) when profiles are used, else shared. Globals shared across concurrent Genie
+   scripts via a per-character in-memory `GlobalStore` synced to the file (load on start;
+   read+write with atomic write + reload-on-mtime for cross-process safety).
+   Build order: read+write `variables.cfg` first (unblocks config-driven scripts), then extend
+   the parser to the other `.cfg` types as the hook layer lands.
 
 ## Target architecture
 
