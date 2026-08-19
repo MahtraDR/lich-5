@@ -55,9 +55,9 @@ Derived from Genie's front-end bar-commands (`Core/Command.cs`). Grouped by conc
 | `class` | `class` | enable/disable a named class (gates highlights/actions) | ✅ |
 | `window` | `window` | add/show/position/remove/close/hide a named window | ✅ |
 | `echo` | `echo >window` | echo text into a named window (vs main) | ✅ |
-| `gag` / `ungag` | `gag`/`ignore`/`squelch`, `ungag` | suppress lines matching a pattern | ✅ |
-| `substitute` / `unsub` | `sub`/`substitute`, `unsub` | rewrite matching text | ✅ |
-| `trigger` | `trigger` | register/clear a regex trigger → command(s), optional class | ✅ |
+| `gag` / `ungag` | `gag`/`ignore`/`squelch`, `ungag` | suppress lines matching a pattern | ✅ (Lich-side) |
+| `substitute` / `unsub` | `sub`/`substitute`, `unsub` | rewrite matching text | ✅ (Lich-side) |
+| `trigger` / `untrigger` | `trigger`, `untrigger` | fire command(s) on a matching game line, optional class gate | ✅ (Lich-side automation) |
 | `macro` / `unmacro` | `macro`, `unmacro` | define/remove a hotkey → command(s) | ✅ |
 | `alias` / `unalias` | `alias`, `unalias` | define/remove an input alias | ✅ |
 | `name` / `unname` | `name`, `unname` | color/class a player/creature name | ✅ |
@@ -76,12 +76,18 @@ Any unrecognized `#command` still emits `{op, {"args": [...], "raw": "..."}}` (s
 These are emitted by `lib/genie/command_router.rb` (the `Core/Command.cs` port) and asserted in
 `spec/lib/genie/command_router_spec.rb`. Fields are authoritative.
 
-- **`class`** — `{"name": <string, lowercased>, "enabled": <bool>}`. One hook per class token, so
-  `#class +a -b` emits two. `#class name on|true|1` → enabled; `off|false|0` → disabled.
-- **`trigger`** — add: `{"pattern": <regex string>, "commands": <string>, "class": <string, "" if
-  omitted>}`; clear: `{"action": "clear"}`. `commands` is the raw Genie command string (may contain
-  its own `#…`/`;`-separated commands) for the front-end's trigger engine to run — Lich does not
-  execute it. Escaped `\\$var` in Genie source arrives here as a literal `$var` (front-end-evaluated).
+- **`class`** — `{"name": <string, lowercased>, "enabled": <bool>}`. One event per class token, so
+  `#class +a -b` emits two. `#class name on|true|1` → enabled; `off|false|0` → disabled. **Dual role:**
+  the sink updates the Lich `Triggers` registry (gating class-`name` triggers on/off — automation,
+  works now) AND emits the `<genieHook>` tag (front-ends gate class-`name` highlights).
+- **`trigger` / `untrigger`** — **Lich-side automation, NOT a rendered tag.** A `#trigger` fires
+  command(s) when a game line matches, so Lich runs it (like a persistent, cross-script `action`);
+  it is not a front-end display effect. The sink routes the normalized event into a process-wide
+  `Triggers` registry backed by the same downstream hook as gag/sub (triggers evaluate on the RAW
+  line *before* gags). Events: add `{"pattern", "commands", "class"}`, `{"action": "clear"}`,
+  `{"action": "list"}` (echoes loaded triggers), and `untrigger {"pattern"}`. `commands` is the raw
+  Genie action string (`;`-separated; `$1..$n` = captures); escaped `\\$var` arrives literal and is
+  expanded at fire time. Class gating: `#class NAME off/on` toggles NAME's triggers (see below).
 - **`echo`** — `{"window": <string>, "text": <string>}` for `#echo >window text`. Plain `#echo text`
   is a **local** echo (not a hook).
 - **`gag` / `ungag`** — `{"pattern": <string>, "class": <string>}`.

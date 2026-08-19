@@ -68,6 +68,35 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   returning `nil` suppresses the line; a String rewrites it. Runs after `$_SERVERBUFFER_`, so
   reget/log/other scripts keep the original.
 
+## Script launch + triggers (from live tester feedback)
+- **Genie's ScriptChar is `.` (Config default).** Outgoing text starting with `.` RUNS A SCRIPT, it
+  is not sent to the game (`ParseCommand` -> `RunScript` -> `ClassCommand_RunScript`: strip the `.`,
+  first token = name, rest = `$1..$n`). So `put .helper foo` launches helper.cmd. We intercept in
+  `Interpreter#send_text` (the choke point for put/send/do + actions) and call an injected `launch`
+  port (glue -> `Script.start`, so `.cmd` re-enters the engine, `.lic` runs normally). This was the
+  tester's #1 blocker; before the fix `.name` went to the game as a literal command.
+- **`#trigger` is AUTOMATION, not a front-end effect.** It fires command(s) on matching game text,
+  so Lich must execute it (a `<genieHook>` no front-end consumes = dead combat triggers). Ported as
+  a process-wide `Triggers` registry (`lib/genie/triggers.rb`) + `TriggerRunner`
+  (`lib/genie/trigger_runner.rb`, reuses CommandRouter+Substitution) fired from ONE Lich
+  DownstreamHook. Reclassified out of the hook catalog. `gag`/`sub`/`trigger` all Lich-side now.
+- **Class-gating default = ON.** `Trigger.IsActive` defaults true (Globals.cs:942); `#class NAME
+  off` sets IsActive=false for triggers whose class==NAME (`ToggleClass`, :966), `on` re-enables;
+  classless triggers always fire; a trigger added while its class is off is still created active.
+  Real scripts add all triggers first, THEN toggle specific classes off in a setup section.
+- **Triggers must fire on the RAW line, before gags.** One combined downstream hook fires triggers
+  first, then applies gag/sub — otherwise a gagged line (returned nil) would never reach the trigger
+  matcher. (So gag/sub self-install was removed from StreamFilters; the glue installs the one hook.)
+- **Trigger bodies use ParseCommand semantics, NOT script-line semantics:** a leading `#` is a bar
+  command (run it) and a bare line is a game/`.script` send — the OPPOSITE of a script line where
+  `#` is a comment and `#commands` need `put`. So trigger actions are `Text.safe_split(';')` then
+  dispatched (`#`->router, `.`->launch, else->game), never lexed as script rows.
+- **`#trigger` (bare) / `#trigger list` lists loaded triggers** (respond); `#untrigger {pat}` removes
+  one; `#trigger clear` removes all. Tester wanted visibility into loaded triggers.
+- Reserved-var doc gap the tester caught: `$lefthandnoun`/`$righthandnoun` existed in RESOLVERS but
+  weren't documented; `$roomplayers` IS supported (DRRoom.pcs). Keep the user-guide reserved list in
+  sync with `LichGameState::RESOLVERS`.
+
 ## DR game-state (the big surprises)
 - **`XMLData` is shared GS/DR.** DR-specific state lives in DR modules.
 - **DR `room_title` is DOUBLE-bracketed**: `"[[Bosque Deriel, Burial Ground]]"`

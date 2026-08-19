@@ -529,16 +529,56 @@ action remove you are knocked to the ground   # remove one by its pattern
 
 ---
 
-## 11. Front-end effects: highlights, gags, substitutions, and more
+## 11. Effects and triggers: `#` commands
 
-Genie scripts often change how the game *looks*: hiding spammy lines, recoloring text, defining
-macros, and so on. These are written as **`#` commands** sent with `put`.
+Genie scripts use **`#` commands** (sent with `put`) for two kinds of things: **automation** that
+Lich runs itself, and **display effects** that a front-end shows. They behave differently in Lich.
 
-There are two groups, and they behave differently in Lich.
+### Group A — Automation: triggers, gags, substitutions (work everywhere, right now)
 
-### Group A — Gags and substitutions (work everywhere, right now)
+These run in Lich itself, so they work on **any** front-end immediately.
 
-These change the text you see, and they work on **any** front-end immediately.
+**Trigger** — run command(s) automatically whenever a game line matches, for as long as you're
+connected (not just while a script runs):
+
+```
+put #trigger {^You are no longer stunned} {put stand} {recovery}
+```
+
+Format: `#trigger {pattern} {commands} {class}`. The `pattern` is a regular expression; `commands`
+is what to run when it matches (use `$1`, `$2`, … for captured groups); `class` (optional) is a
+group name you can switch on/off. Multiple commands are separated with `;`:
+
+```
+put #trigger {^(\w+) glances at you} {echo $1 is watching;put face $1} {social}
+```
+
+Manage them:
+
+```
+put #trigger              # list all loaded triggers (also: put #trigger list)
+put #untrigger ^You are no longer stunned   # remove one by its pattern
+put #trigger clear        # remove them all
+```
+
+**Classes turn groups of triggers on and off.** A trigger with a `class` only fires while that class
+is on. Classes start **on**; turn them off/on with `#class`:
+
+```
+put #class recovery off    # the "recovery" trigger above stops firing
+put #class recovery on     # ...and starts again
+```
+
+> `put #trigger` prints your loaded triggers to your window, so you can always see what's active —
+> handy while testing.
+
+**Gag** — hide any line matching a pattern:
+
+```
+put #gag a small bird flies past
+```
+
+From now on, lines containing "a small bird flies past" won't be shown to you.
 
 **Gag** — hide any line matching a pattern:
 
@@ -569,24 +609,26 @@ put #unsub a fierce creature
 > Patterns are treated as regular expressions. `put #gag ^You see nothing` hides only lines that
 > *start* with "You see nothing".
 
-### Group B — Highlights, macros, classes, triggers, windows, sounds…
+### Group B — Display effects: highlights, macros, windows, sounds…
 
-These are announced by Lich in a **universal format** that any front-end can choose to display. Some
-examples of the commands your scripts might use:
+These change how the game *looks or sounds*. Lich announces them in a **universal format** that any
+front-end can choose to display. Examples:
 
 ```
 put #highlight line yellow {a treasure chest}
-put #class combat on
-put #trigger {^You feel fully rested} {put stand} {rest}
 put #macro {ctrl+a} {attack creature}
 put #playsound alert.wav
 ```
 
-**What happens today:** the automation always runs. Whether the *visual* effect (the yellow
-highlight, the macro key, the sound) actually appears depends on whether your front-end has added
-support for these announcements yet. If it hasn't, the commands are simply ignored — they will never
-cause an error, and your script keeps running normally. As front-ends add support, these light up
-automatically with no change to your scripts.
+**What happens today:** whether the *visual/audio* effect (the yellow highlight, the macro key, the
+sound) actually appears depends on whether your front-end has added support for these announcements
+yet. If it hasn't, the commands are simply ignored — they will never cause an error, and your script
+keeps running normally. As front-ends add support, these light up automatically with no change to
+your scripts.
+
+> **A note on `#class`:** classes do double duty. They gate your **triggers** (Group A, working now)
+> *and* they can color text via highlights (Group B, front-end-dependent). So `#class x off` always
+> stops class-`x` triggers immediately; the coloring part waits on front-end support.
 
 > **You don't need to memorize the `#` commands.** If your existing `.cmd` scripts already use them,
 > they'll just work (or be safely ignored). This section is here so you know what they are.
@@ -671,9 +713,11 @@ echo There are $monstercount creatures here.
 | Variable | Meaning |
 |---|---|
 | `$lefthand`, `$righthand` | What's in each hand ("Empty" if nothing) |
+| `$lefthandnoun`, `$righthandnoun` | Just the one-word noun of the held item (e.g. `sword`) |
 
 ```
 if "$righthand" = "Empty" then put get my weapon
+put stow $lefthandnoun
 ```
 
 ### Status
@@ -717,8 +761,20 @@ Also available: `$time`, `$date`, `$year`, `$month`, and related time values.
 
 ### Other
 
-`$preparedspell` (the spell you have prepared), `$roundtime` (seconds of round time left),
-`$name` (your character), `$game`, `$level`.
+| Variable | Meaning |
+|---|---|
+| `$preparedspell` | The spell you currently have prepared |
+| `$roundtime` | Seconds of round time remaining |
+| `$casttime`, `$casttimeremaining` | Seconds of cast round time remaining |
+| `$prompt` | Your current game prompt |
+| `$name` (or `$charactername`) | Your character's name |
+| `$game` (or `$gamename`) | The game you're playing (e.g. `DR`) |
+| `$level` | Your character level |
+| `$roomtitle`, `$roomdesc`, `$gameroomid`, `$inside` | Raw room title, description, room id, and `1`/`0` for indoors |
+
+> If you know a Genie reserved variable that isn't listed here, try it — many of the standard ones
+> are supported. If one you rely on is missing or returns nothing, please report it (it's easy to
+> add), and note the exact variable name.
 
 ---
 
@@ -731,6 +787,24 @@ Also available: `$time`, `$date`, `$year`, `$month`, and related time values.
 - **Stop one script:** `;kill name` (or `;k name`)
 - **Stop everything:** `;killall`
 - **Pause / unpause a script:** `;pause name` / `;unpause name`
+
+### Launching one script from another
+
+Inside a script, a command that begins with a period (`.`) **launches another script** instead of
+being sent to the game — exactly like Genie's `.scriptname`:
+
+```
+put .setup            # runs setup.cmd
+put .buffs full       # runs buffs.cmd with $1 = "full"
+send .helper          # send works too
+```
+
+The first word after the `.` is the script name; anything after it becomes that script's `$1`, `$2`,
+… arguments. A `.cmd` target runs through the Genie engine; a `.lic` target runs as a normal Lich
+script. The launched script runs alongside yours (it doesn't pause the caller).
+
+> Ordinary commands are unaffected — `put attack kobold` still goes to the game. Only a leading `.`
+> means "launch a script."
 
 Example script that uses arguments:
 
@@ -901,16 +975,32 @@ action remove pattern
 action clear
 ```
 
-**Display effects:**
+**Launch another script (leading `.`):**
 
 ```
+put .scriptname args    # runs scriptname.cmd with $1.. = args
+```
+
+**Triggers & filters (run in Lich, work now):**
+
+```
+put #trigger {pattern} {commands} {class}
+put #trigger              # list loaded triggers
+put #untrigger pattern
+put #trigger clear
+put #class name on|off    # gate a group of triggers
 put #gag pattern
 put #ungag pattern
 put #sub {pattern} {replacement}
 put #unsub pattern
+```
+
+**Display effects (front-end dependent):**
+
+```
 put #highlight line color {text}
-put #class name on|off
-put #trigger {pattern} {commands} {class}
+put #macro {key} {command}
+put #playsound file
 ```
 
 **Files:**
