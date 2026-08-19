@@ -141,4 +141,45 @@ RSpec.describe Lich::Genie::Lexer do
       expect(program.warnings.map { |w| w[:content] }).to eq(['frobnicate x'])
     end
   end
+
+  describe 'JavaScript blocks (<% ... %>) -- deferred, skipped' do
+    it 'skips a multi-line JS block but keeps surrounding script' do
+      program = compile(['echo before', '<%', 'if (x !== undefined) {', '  doThing();', '}', '%>', 'echo after'])
+      expect(functions(program)).to eq(%i[echo echo])
+      expect(contents(program)).to eq(['echo before', 'echo after'])
+    end
+
+    it 'does not misread a real if that merely contains <% (a < and a %var)' do
+      program = compile(['if (%y<%khri.length) then echo go'])
+      expect(functions(program)).to eq(%i[if_func echo])
+    end
+
+    it 'skips a single-line <% ... %> block' do
+      program = compile(['echo a', '<% var x = 1 %>', 'echo b'])
+      expect(functions(program)).to eq(%i[echo echo])
+    end
+  end
+
+  describe 'robustness for real-world corpora' do
+    it 'strips a leading UTF-8 BOM so line 1 parses' do
+      bom = [0xFEFF].pack('U')
+      program = compile(["#{bom}include lib.cmd", "#{bom}echo hi"], ignore_warnings: true)
+      expect(functions(program)).to eq([:echo])
+      expect(program.files).to include('lib.cmd')
+    end
+
+    it 'skips a .js include (pure JavaScript) without parsing it as Genie' do
+      loader = ->(_name) { "function doSort() { if (a !== b) { return 1; } }" }
+      program = compile(['include js_arrays.js', 'echo ok'], include_loader: loader, ignore_warnings: true)
+      expect(functions(program)).to eq([:echo])
+      expect(program.warnings).to be_empty
+      expect(program.files).to include('js_arrays.js')
+    end
+
+    it 'records a warning (does not crash) on a malformed if under ignore_warnings' do
+      program = compile(['if (bad javascript) {', 'echo ok'], ignore_warnings: true)
+      expect(functions(program)).to eq([:echo])
+      expect(program.warnings).not_to be_empty
+    end
+  end
 end

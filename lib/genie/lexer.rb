@@ -35,6 +35,10 @@ module Lich
       # escape so the source stays ASCII-only).
       MULTILINE_SEP = [0xA4].pack('U')
 
+      # UTF-8 byte-order mark (built at runtime so the source stays ASCII-only, per the
+      # AsciiOnlySource cop). Stripped from line starts -- Genie's StreamReader drops it.
+      BOM = [0xFEFF].pack('U')
+
       # First-word keyword => function symbol.
       FUNCTION_MAP = {
         'action' => :action, 'include' => :include, 'echo' => :echo,
@@ -80,6 +84,7 @@ module Lich
         @labels = {}
         @files = []
         @warnings = []
+        @in_jsblock = false
       end
 
       # @return [Program]
@@ -103,12 +108,31 @@ module Lich
       # Process one raw source line (splitting on the inline-newline sentinel).
       def append_line(raw, file_id, file_row)
         raw.to_s.split(MULTILINE_SEP).each do |part|
-          row = part.strip
+          # Strip a leading UTF-8 BOM (Genie's .NET StreamReader does this transparently;
+          # Ruby's File.read keeps it, which would break `include`/`#comment` on line 1).
+          row = part.strip.delete_prefix(BOM)
           next if row.empty? # blank lines skipped
+          next if skip_jsblock(row) # <% ... %> JS blocks are deferred (Decision 2); skip
           next if row.start_with?('#') # Genie treats a leading '#' as a comment (LoadFile)
 
           process_row(row, file_id, file_row)
         end
+      end
+
+      # Track/skip `<% ... %>` JavaScript blocks (Genie AppendFile jsblock handling:
+      # opener line starts with `<%`, closer line ends with `%>`). JS execution is
+      # deferred (design Decision 2), so the block body is skipped, not compiled.
+      # @return [Boolean] true if +row+ was part of a JS block (caller should skip it)
+      def skip_jsblock(row)
+        if @in_jsblock
+          @in_jsblock = false if row.end_with?('%>')
+          return true
+        end
+        return false unless row.start_with?('<%')
+
+        # An opener; stay in the block unless it also closes on the same line.
+        @in_jsblock = !(row.length > 2 && row.end_with?('%>'))
+        true
       end
 
       def process_row(row, file_id, file_row)
@@ -211,14 +235,25 @@ module Lich
         separator = " #{marker} "
         arg_idx = argument.downcase.index(separator)
         row_idx = row.downcase.index(separator)
-        raise Error, "Invalid #{marker == 'then' ? 'IF' : 'WHILE'} statement: #{row}" if arg_idx.nil? || row_idx.nil?
+        return invalid_conditional(row, marker, file_id, file_row) if arg_idx.nil? || row_idx.nil?
 
         remainder = argument[(arg_idx + separator.length)..].to_s.strip
-        raise Error, "Invalid #{marker == 'then' ? 'IF' : 'WHILE'} statement: #{row}" if remainder.empty?
+        return invalid_conditional(row, marker, file_id, file_row) if remainder.empty?
 
         head = row[0...(row_idx + separator.length)].strip
         add_instruction(file_id, file_row, head, marker == 'then' ? :if_func : :while_func)
         append_line(remainder, file_id, file_row)
+        true
+      end
+
+      # A malformed `if ... then` / `while ... do`. Under ignore_warnings this is
+      # recorded and skipped (best-effort compile of a large corpus) instead of
+      # aborting the whole parse. Returns true (the row is considered handled).
+      def invalid_conditional(row, marker, file_id, file_row)
+        message = "Invalid #{marker == 'then' ? 'IF' : 'WHILE'} statement: #{row}"
+        raise Error, message unless @ignore_warnings
+
+        @warnings << { file_id: file_id, file_row: file_row, content: row }
         true
       end
 
@@ -227,6 +262,7 @@ module Lich
         return if @files.include?(name)
 
         included_id = add_file(name)
+        return if name.downcase.end_with?('.js') # pure JS library; deferred (Decision 2)
         return unless @include_loader
 
         source = @include_loader.call(name)

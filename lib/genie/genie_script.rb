@@ -296,6 +296,11 @@ module Lich
         'roomname' => -> { LichGameState.clean_room_name },
         'roomtitle' => -> { XMLData.room_title }, 'roomdesc' => -> { XMLData.room_description },
         'roomexits' => -> { Array(XMLData.room_exits).join(', ') }, 'gameroomid' => -> { XMLData.room_id },
+        # $roomid is Genie's automapper current-room number. We have no automapper, so
+        # bridge it to Lich's room id (mapdb UID). NOTE: scripts that navigate by room
+        # number compare $roomid against configured target rooms -- those targets must
+        # be Lich room ids (or a Genie->Lich map applied) for the comparison to hold.
+        'roomid' => -> { XMLData.room_id },
         'roomobjs' => -> { LichGameState.room_objects.join('|') },
         'roomplayers' => -> { LichGameState.room_players.join('|') },
         'roomnote' => -> { '' }, 'inside' => -> { XMLData.room_inside ? 1 : 0 },
