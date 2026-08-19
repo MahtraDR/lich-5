@@ -195,11 +195,15 @@ RSpec.describe Lich::Genie::Interpreter do
   describe 'front-end hooks' do
     it 'emits a genieHook for a front-end bar command' do
       source = <<~GENIE
-        put #highlight red kobold
+        put #highlight line red {a kobold}
         exit
       GENIE
       result = run_script(source)
-      expect(result[:hooks]).to eq([['highlight', { 'args' => %w[red kobold], 'raw' => 'red kobold' }]])
+      expect(result[:hooks]).to eq([['highlight', {
+        'kind' => 'line', 'whole_row' => true, 'color' => 'red',
+                                     'pattern' => 'a kobold', 'case_sensitive' => false,
+                                     'sound' => '', 'class' => '', 'active' => true
+      }]])
       expect(result[:commands]).to be_empty
     end
 

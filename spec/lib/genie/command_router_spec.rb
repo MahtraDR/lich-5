@@ -134,9 +134,67 @@ RSpec.describe Lich::Genie::CommandRouter do
                           ])
     end
 
-    it 'emits unknown/tokenized front-end ops with args + raw' do
+    it '#highlight (line) emits full self-describing payload' do
+      router.route('#highlight line yellow {a hungry kobold}')
+      expect(hooks).to eq([['highlight', {
+        'kind' => 'line', 'whole_row' => true, 'color' => 'yellow',
+                            'pattern' => 'a hungry kobold', 'case_sensitive' => false,
+                            'sound' => '', 'class' => '', 'active' => true
+      }]])
+    end
+
+    it '#highlight regex normalizes kind and defaults active=true' do
+      router.route('#highlight regexp red {^You die} true alarm.wav combat')
+      _, p = hooks.first
+      expect(p['kind']).to eq('regex')
+      expect(p['whole_row']).to be(false)
+      expect(p['case_sensitive']).to be(true)
+      expect(p['sound']).to eq('alarm.wav')
+      expect(p['class']).to eq('combat')
+      expect(p['active']).to be(true)
+    end
+
+    it '#highlight clear emits a clear event' do
+      router.route('#highlight clear')
+      expect(hooks).to eq([['highlight', { 'clear' => true }]])
+    end
+
+    it 'emits macro/alias/preset/name pairs' do
       router.route('#macro {ctrl+a} {attack}')
-      expect(hooks).to eq([['macro', { 'args' => ['ctrl+a', 'attack'], 'raw' => '{ctrl+a} {attack}' }]])
+      router.route('#alias {kk} {attack kobold}')
+      router.route('#preset {roomname} {#00ff00}')
+      router.route('#name combat {a goblin} {an orc}')
+      expect(hooks).to eq([
+                            ['macro', { 'key' => 'ctrl+a', 'command' => 'attack' }],
+                            ['alias', { 'pattern' => 'kk', 'command' => 'attack kobold' }],
+                            ['preset', { 'name' => 'roomname', 'value' => '#00ff00' }],
+                            ['name', { 'name' => 'a goblin', 'value' => 'combat' }],
+                            ['name', { 'name' => 'an orc', 'value' => 'combat' }]
+                          ])
+    end
+
+    it 'emits window/playsound/link/image/flash payloads' do
+      router.route('#window add {thoughts}')
+      router.route('#playsound alert.wav')
+      router.route('#playsound stop')
+      router.route('#link >map {bank} {go bank}')
+      router.route('#image >combat w:64 h:32 sword.png')
+      router.route('#flash')
+      expect(hooks).to eq([
+                            ['window', { 'action' => 'add', 'name' => 'thoughts',
+                                         'width' => 300, 'height' => 200, 'top' => 10, 'left' => 10 }],
+                            ['playsound', { 'file' => 'alert.wav' }],
+                            ['playsound', { 'stop' => true }],
+                            ['link', { 'window' => 'map', 'text' => 'bank', 'command' => 'go bank' }],
+                            ['image', { 'filename' => 'sword.png', 'window' => 'combat',
+                                        'width' => 64, 'height' => 32 }],
+                            ['flash', {}]
+                          ])
+    end
+
+    it 'falls back to tokenized {args, raw} for a genuinely unknown op' do
+      router.route('#frobnicate {a} {b}')
+      expect(hooks).to eq([['frobnicate', { 'args' => %w[a b], 'raw' => '{a} {b}' }]])
     end
   end
 end
