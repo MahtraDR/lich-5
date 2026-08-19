@@ -97,6 +97,37 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   weren't documented; `$roomplayers` IS supported (DRRoom.pcs). Keep the user-guide reserved list in
   sync with `LichGameState::RESOLVERS`.
 
+## Real-corpus parsing (GenieHunter / Mastercraft / ubercombat)
+- **`<% ... %>` = JavaScript block** (Genie AppendFile: opener line starts `<%`, closer line ends
+  `%>`; body is JS). We SKIP it (JS deferred). Detect the opener by START-of-line `<%` so
+  `if (%y<%khri.length)` (a `<` followed by `%khri`) is NOT mistaken for a block.
+- **`include foo.js` is a pure-JS library** (loaded into Genie's JS engine) — skip it, don't parse
+  as Genie. **UTF-8 BOM**: Genie's StreamReader strips it; Ruby doesn't -> strip a leading BOM per
+  line or `include`/`#comment` on line 1 breaks (built via `[0xFEFF].pack('U')` for AsciiOnlySource).
+- **`ignore_warnings` must never hard-raise.** Live runs compile with ignore_warnings; a malformed
+  `if/while` (often JS that slipped through) is recorded as a warning and skipped, not raised.
+- **Faithful residual warnings:** `deletevariable` (Genie's `GetFunctionType` only maps `unvar`/
+  `unvariable`/`unsetvar`/`unsetvariable` -> deletevariable, NOT `deletevariable` itself), `mif`,
+  and bare junk lines (`****`, `*fixed`) are unknown in Genie too — do NOT add them (stay faithful).
+- **Expression functions are the workhorse:** `matchre()` (8660x in the corpus), `contains`, `def`,
+  `toupper`/`tolower`, `count`, `replace` — all already in `Eval#call_function` and verified.
+- **`.name` launches a script from put/send/do AND `#send`** (tester-confirmed: `#send .uncon` runs
+  uncon.cmd; `put .loadcombattriggers` runs loadcombattriggers.cmd). Handled in `send_text`.
+
+## Movement / room navigation (OPEN — needs a decision)
+- Room-nav scripts (Mastercraft especially) use **`$roomid`** (Genie's automapper current-room
+  number, 81x) compared to configured target rooms (`$MC_PREFERRED.ROOM`, `$part.room`, ...), then
+  call an in-script `automove:` sub that does **`put #goto <roomnum>`** + `put #mapper reset` and
+  matchwaits on Genie automapper output (`YOU HAVE ARRIVED` / `YOU HAVE FAILED`). Genie's reserved
+  var is `gameroomid`; **`$roomid` is set by the automapper**, which we don't have.
+- We bridge `$roomid` -> `XMLData.room_id` (Lich mapdb UID). Two ways to make nav work:
+  **(A, no map merge)** users set their target-room config vars to LICH room ids; bridge `#goto N`
+  -> `go2 N` / `DRC.walk_to(N)`; least work. **(B, map merge)** keep Genie roomids in configs and add
+  a Genie<->Lich room translation table (the "merge genie map data" project); more faithful, needs
+  the data + upkeep. CAVEAT for both: the `automove` sub scrapes Genie automapper *messages*, which
+  go2/DRC.walk_to don't emit — a `#goto` bridge also needs a compat shim that emits
+  `YOU HAVE ARRIVED`/`YOU HAVE FAILED` (or the scripts need minor edits). Movement is Phase-6.
+
 ## DR game-state (the big surprises)
 - **`XMLData` is shared GS/DR.** DR-specific state lives in DR modules.
 - **DR `room_title` is DOUBLE-bracketed**: `"[[Bosque Deriel, Burial Ground]]"`
