@@ -178,7 +178,7 @@ module Lich
         'connected' => -> { 1 }, 'client' => -> { 'Lich' },
         'version' => -> { defined?(LICH_VERSION) ? LICH_VERSION : '' },
         # state
-        'stance' => -> { XMLData.stance_text }, 'preparedspell' => -> { XMLData.prepared_spell },
+        'preparedspell' => -> { XMLData.prepared_spell },
         'roundtime' => -> { [XMLData.roundtime_end.to_i - Time.now.to_i, 0].max },
         'casttime' => -> { [XMLData.cast_roundtime_end.to_i - Time.now.to_i, 0].max },
         'casttimeremaining' => -> { [XMLData.cast_roundtime_end.to_i - Time.now.to_i, 0].max },
@@ -237,15 +237,16 @@ module Lich
 
       def key?(name)
         key = name.to_s.downcase
-        RESOLVERS.key?(key) || !Reserved.indicator_id(key).nil? || Reserved.spell_timer?(name)
+        RESOLVERS.key?(key) || !Reserved.indicator_check(key).nil? || Reserved.spell_timer?(name)
       end
 
       def [](name)
         key = name.to_s.downcase
         if (resolver = RESOLVERS[key])
           resolver.call.to_s
-        elsif (icon = Reserved.indicator_id(key))
-          XMLData.indicator[icon] == 'y' ? '1' : '0'
+        elsif (check = Reserved.indicator_check(key))
+          # Lich status predicates (checkbleeding, checkstanding, ...) work for DR + GS
+          send(check) ? '1' : '0'
         elsif Reserved.spell_timer?(name)
           Reserved.spell_timer(active_spells, name).to_s
         end

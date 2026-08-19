@@ -14,21 +14,22 @@ module Lich
     module Reserved
       SPELL_TIMER = /\ASpellTimer\.(?<spell>.+)\.(?<field>active|duration)\z/i
 
-      # Genie flag name => Lich indicator id (from ICONMAP).
-      INDICATOR_IDS = {
-        'bleeding'  => 'IconBLEEDING',
-        'dead'      => 'IconDEAD',
-        'hidden'    => 'IconHIDDEN',
-        'invisible' => 'IconINVISIBLE',
-        'kneeling'  => 'IconKNEELING',
-        'prone'     => 'IconPRONE',
-        'sitting'   => 'IconSITTING',
-        'standing'  => 'IconSTANDING',
-        'stunned'   => 'IconSTUNNED',
-        'webbed'    => 'IconWEBBED',
-        'joined'    => 'IconJOINED',
-        'poisoned'  => 'IconPOISONED',
-        'diseased'  => 'IconDISEASED'
+      # Genie flag name => Lich global status predicate. These work for both DR and
+      # GS (unlike XMLData.indicator, which DR does not populate).
+      INDICATOR_CHECKS = {
+        'bleeding'  => :checkbleeding,
+        'dead'      => :checkdead,
+        'hidden'    => :checkhidden,
+        'invisible' => :checkinvisible,
+        'kneeling'  => :checkkneeling,
+        'prone'     => :checkprone,
+        'sitting'   => :checksitting,
+        'standing'  => :checkstanding,
+        'stunned'   => :checkstunned,
+        'webbed'    => :checkwebbed,
+        'joined'    => :checkgrouped,
+        'poisoned'  => :checkpoison,
+        'diseased'  => :checkdisease
       }.freeze
 
       module_function
@@ -58,9 +59,9 @@ module Lich
       end
 
       # @param name [String]
-      # @return [String, nil] the ICONMAP id for an indicator flag, or nil
-      def indicator_id(name)
-        INDICATOR_IDS[name.to_s.downcase]
+      # @return [Symbol, nil] the Lich status-predicate method for a flag, or nil
+      def indicator_check(name)
+        INDICATOR_CHECKS[name.to_s.downcase]
       end
 
       def despace(text)

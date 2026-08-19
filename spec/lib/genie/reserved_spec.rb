@@ -31,11 +31,12 @@ RSpec.describe Lich::Genie::Reserved do
     end
   end
 
-  describe '.indicator_id' do
-    it 'maps Genie flag names to ICONMAP ids' do
-      expect(described_class.indicator_id('bleeding')).to eq('IconBLEEDING')
-      expect(described_class.indicator_id('STANDING')).to eq('IconSTANDING')
-      expect(described_class.indicator_id('nonsense')).to be_nil
+  describe '.indicator_check' do
+    it 'maps Genie flag names to Lich status predicates' do
+      expect(described_class.indicator_check('bleeding')).to eq(:checkbleeding)
+      expect(described_class.indicator_check('STANDING')).to eq(:checkstanding)
+      expect(described_class.indicator_check('joined')).to eq(:checkgrouped)
+      expect(described_class.indicator_check('nonsense')).to be_nil
     end
   end
 end

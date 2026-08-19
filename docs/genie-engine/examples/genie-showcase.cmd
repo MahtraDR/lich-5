@@ -16,7 +16,8 @@ gosub showargs alpha bravo charlie
 echo   reserved (live game state):
 echo     $health/$mana/$spirit = $health / $mana / $spirit
 echo     room  = $roomname   exits: $roomexits   north? $north
-echo     hands = L:$lefthand  R:$righthand   stance: $stance
+echo     hands = L:$lefthand  R:$righthand
+echo     status: standing=$standing kneeling=$kneeling bleeding=$bleeding dead=$dead hidden=$hidden
 echo     creatures = $monstercount ($monsterlist)
 echo     spell timer: Firewall active=$SpellTimer.Firewall.active dur=$SpellTimer.Firewall.duration
 echo     specials: unixtime=$unixtime  time=@time24@
