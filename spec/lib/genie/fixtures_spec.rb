@@ -86,4 +86,70 @@ RSpec.describe 'Genie real-script fixtures' do
       expect(enabled_flags).to all(satisfy { |v| [true, false].include?(v) })
     end
   end
+
+  describe 'end-to-end: the registered triggers actually FIRE on game lines' do
+    # A headless stand-in for LichHookSink: routes trigger/class events into a real
+    # Triggers registry (the same wiring the Lich glue does).
+    trigger_sink = Class.new do
+      def initialize(triggers) = (@triggers = triggers)
+
+      def emit(op, payload)
+        case op
+        when 'trigger'
+          case payload['action']
+          when 'clear' then @triggers.clear
+          when 'list' then nil
+          else @triggers.add(payload['pattern'], payload['commands'], klass: payload['class'])
+          end
+        when 'untrigger' then @triggers.remove(payload['pattern'])
+        when 'class' then @triggers.set_class(payload['name'], payload['enabled'])
+        end
+      end
+    end
+
+    it 'loads commoncombattriggers.cmd and a matching line runs the trigger action' do
+      store = Lich::Genie::GlobalStore.new(file: nil)
+      triggers = Lich::Genie::Triggers.new
+      sink = trigger_sink.new(triggers)
+      game_state = { 'unixtime' => '1000000', 'preparedspell' => 'None' }
+
+      # 1) Run the real script; its `put #trigger ...` lines register into the registry.
+      source = "var combattriggerreturn exitcct\ngoto SetTriggersCCT\n" \
+               "#{File.read(File.join(fixtures_dir, 'commoncombattriggers.cmd'))}\nexitcct:\nexit\n"
+      script_vars = Lich::Genie::Variables.new(game_state: game_state, global_store: store)
+      Lich::Genie::Engine.build(
+        source, name: 'cct', variables: script_vars, ignore_warnings: true,
+        game: recording_game.new, input: nil_input.new, echo: ->(_t) {}, hooks: sink,
+        launch: ->(_n, _a) {}, clock: -> { 0.0 }
+      ).run
+      expect(triggers.count).to be >= 30
+
+      # 2) A runner (shares the global store) executes matched trigger actions.
+      runner_vars = Lich::Genie::Variables.new(game_state: game_state, global_store: store)
+      globals = Object.new
+      globals.define_singleton_method(:key?) { |name| runner_vars.global_key?(name) }
+      runner = Lich::Genie::TriggerRunner.new(
+        vars: runner_vars, eval: Lich::Genie::Eval.new(globals: globals),
+        game: recording_game.new, launch: ->(_n, _a) {}, hooks: sink, echo: ->(_t) {}
+      )
+
+      # The firebreathing trigger's class ("db") is gated OFF by the script's own
+      # setup (if ($dbtimer > $unixtime) ... else #class db off) -- faithful to Genie.
+      db_trigger = triggers.list.find { |t| t['class'] == 'db' }
+      expect(db_trigger['active']).to be(false)
+
+      firebreathing = 'You feel ready for more firebreathing.'
+      # 3a) While gated off, the trigger does NOT fire.
+      fired = 0
+      triggers.apply(firebreathing) { |_c, _caps| fired += 1 }
+      expect(fired).to eq(0)
+
+      # 3b) Turn the class on (as the db-load path would) -> now it fires and its
+      #     action runs: {#var dbtimer 0;#class db off}.
+      triggers.set_class('db', true)
+      triggers.apply(firebreathing) { |cmds, caps| runner.fire(cmds, caps) }
+      expect(store.get('dbtimer')).to eq('0') # #var dbtimer 0 ran
+      expect(triggers.list.find { |t| t['class'] == 'db' }['active']).to be(false) # #class db off ran
+    end
+  end
 end

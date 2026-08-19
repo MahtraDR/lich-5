@@ -66,6 +66,7 @@ module Lich
       # Thread body: run the Genie interpreter wired to Lich.
       # @return [void]
       def run_genie
+        GenieScript.ensure_downstream_hook! # gag/sub + trigger firing on the game stream
         # Shared, per-character global store backed by GenieProfiles/Config/variables.cfg,
         # so #var/#svar persist and are visible across concurrent Genie scripts + characters.
         variables = Variables.new(game_state: LichGameState.new, global_store: Lich::Genie.global_store)
@@ -86,6 +87,46 @@ module Lich
           clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }
         )
         interpreter.run
+      end
+
+      @downstream_installed = false
+
+      class << self
+        # Install (once) the single Lich DownstreamHook that powers Model A gag/sub
+        # AND fires #triggers. Triggers run FIRST on the raw game line (so a gagged
+        # line still fires triggers), then gag/sub filter the client display.
+        # @return [void]
+        def ensure_downstream_hook!
+          return if @downstream_installed
+
+          @downstream_installed = true
+          runner = trigger_runner
+          Lich::Common::DownstreamHook.add('genie-downstream', lambda { |server_string|
+            begin
+              Lich::Genie.triggers.apply(server_string) { |commands, captures| runner.fire(commands, captures) }
+            rescue StandardError => e
+              respond "--- Lich: genie trigger error: #{e}"
+            end
+            Lich::Genie.stream_filters.apply(server_string)
+          }, persist: true)
+        end
+
+        # Global-scoped runner that executes trigger actions (shared global store, so
+        # trigger #vars persist and are visible to scripts).
+        # @return [TriggerRunner]
+        def trigger_runner
+          @trigger_runner ||= begin
+            vars = Variables.new(game_state: LichGameState.new, global_store: Lich::Genie.global_store)
+            globals = Object.new
+            globals.define_singleton_method(:key?) { |name| vars.global_key?(name) }
+            TriggerRunner.new(
+              vars: vars, eval: Eval.new(globals: globals),
+              game: LichGamePort.new,
+              launch: ->(name, args) { Lich::Common::Script.start(name, args) },
+              hooks: LichHookSink.new, echo: ->(text) { respond(text) }
+            )
+          end
+        end
       end
 
       private
@@ -147,32 +188,60 @@ module Lich
       end
     end
 
-    # Consumes the interpreter's normalized front-end effect events. Most emit a
-    # <genieHook> tag on the client stream (front-ends that don't implement the
-    # protocol safely ignore the unknown tag). gag/sub are instead applied as a Lich
-    # DownstreamHook (Model A, Decision 6) -- stream-side, universal, non-destructive.
+    # Consumes the interpreter's normalized front-end effect events and dispatches
+    # each to the right place:
+    #   * gag/sub  -> Model A stream rewrite (Decision 6)
+    #   * trigger  -> Lich-side trigger registry (automation; fires commands)
+    #   * class    -> gates triggers AND emits a <genieHook> tag (front-end highlights)
+    #   * others   -> a <genieHook> tag (front-ends that don't implement it ignore it)
     class LichHookSink
       MODEL_A_OPS = %w[gag ungag substitute unsub].freeze
 
       def emit(op, payload)
-        return apply_stream_filter(op, payload) if MODEL_A_OPS.include?(op)
-
-        emit_tag(op, payload)
+        case op
+        when *MODEL_A_OPS then apply_stream_filter(op, payload)
+        when 'trigger' then apply_trigger(payload)
+        when 'untrigger' then Lich::Genie.triggers.remove(payload['pattern'])
+        when 'class'
+          Lich::Genie.triggers.set_class(payload['name'], payload['enabled'])
+          emit_tag(op, payload) # front-ends still need class state for highlight gating
+        else emit_tag(op, payload)
+        end
+      rescue StandardError
+        nil
       end
 
       private
 
+      def apply_trigger(payload)
+        triggers = Lich::Genie.triggers
+        case payload['action']
+        when 'clear' then triggers.clear
+        when 'list' then list_triggers(triggers)
+        else triggers.add(payload['pattern'], payload['commands'], klass: payload['class'])
+        end
+      end
+
+      def list_triggers(triggers)
+        entries = triggers.list
+        return respond('--- Lich: genie: no triggers loaded') if entries.empty?
+
+        respond "--- Lich: genie triggers (#{entries.length}):"
+        entries.each do |t|
+          state = t['active'] ? 'on' : 'off'
+          klass = t['class'].to_s.empty? ? '' : " [class: #{t['class']} #{state}]"
+          respond "    /#{t['pattern']}/#{klass} -> #{t['commands']}"
+        end
+      end
+
       def apply_stream_filter(op, payload)
         filters = Lich::Genie.stream_filters
-        filters.ensure_hook_installed
         case op
         when 'gag' then filters.add_gag(payload['pattern'], klass: payload['class'])
         when 'ungag' then filters.remove_gag(payload['pattern'])
         when 'substitute' then filters.add_sub(payload['pattern'], payload['replacement'], klass: payload['class'])
         when 'unsub' then filters.remove_sub(payload['pattern'])
         end
-      rescue StandardError
-        nil
       end
 
       def emit_tag(op, payload)

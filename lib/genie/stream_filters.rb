@@ -23,7 +23,6 @@ module Lich
       def initialize
         @gags = {}
         @subs = {}
-        @installed = false
         @mutex = Mutex.new
       end
 
@@ -61,16 +60,6 @@ module Lich
         return nil if gags.any? { |gag| gag.regex.match?(line) }
 
         subs.reduce(line) { |acc, sub| acc.gsub(sub.regex, sub.replacement) }
-      end
-
-      # Register the single downstream hook (idempotent). Called lazily the first
-      # time a gag/sub is issued so a session with no filters installs nothing.
-      # @return [void]
-      def ensure_hook_installed
-        install = @mutex.synchronize { @installed ? false : (@installed = true) }
-        return unless install
-
-        Lich::Common::DownstreamHook.add('genie-stream-filters', ->(line) { apply(line) }, persist: true)
       end
 
       private

@@ -29,6 +29,50 @@ module Lich
         idx ? s[(idx + 1)..] : ''
       end
 
+      # Port of Utility.SafeSplit: split on +sep+ (a single char, default ';') while
+      # honoring {...} brace groups and "..." quotes, so a separator inside a group is
+      # not a split point. Braces/quotes are LEFT INTACT (unlike parse_args). Used to
+      # break a trigger/command body into its `;`-separated sub-commands.
+      #
+      # @param str [String]
+      # @param sep [String] one-character separator
+      # @return [Array<String>]
+      def safe_split(str, sep = ';')
+        s = str.to_s
+        parts = []
+        buffer = +''
+        in_quote = false
+        depth = 0
+        i = 0
+        while i < s.length
+          ch = s[i]
+          if ch == '\\' && i + 1 < s.length
+            buffer << ch << s[i + 1]
+            i += 2
+            next
+          elsif ch == '"'
+            in_quote = !in_quote
+            buffer << ch
+          elsif in_quote
+            buffer << ch
+          elsif ch == '{'
+            depth += 1
+            buffer << ch
+          elsif ch == '}'
+            depth -= 1 if depth.positive?
+            buffer << ch
+          elsif ch == sep && depth.zero?
+            parts << buffer
+            buffer = +''
+          else
+            buffer << ch
+          end
+          i += 1
+        end
+        parts << buffer
+        parts
+      end
+
       # Port of Utility.ParseArgs: split on whitespace while honoring "..." quoted
       # strings (quotes stripped), {...} brace groups (outer braces stripped, inner
       # kept, an empty {} yields an empty token), and \ escapes.

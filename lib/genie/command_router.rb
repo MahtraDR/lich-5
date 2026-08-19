@@ -95,6 +95,7 @@ module Lich
         case keyword
         when 'class', 'classes' then emit_class(args)
         when 'trigger', 'triggers' then emit_trigger(args)
+        when 'untrigger' then (args.length >= 2 ? emit('untrigger', 'pattern' => args[1].to_s) : '')
         when 'gag', 'gags', 'ignore', 'ignores', 'squelch' then emit_gag('gag', args)
         when 'ungag' then emit_gag('ungag', args)
         when 'sub', 'subs', 'substitute' then emit_sub('substitute', args)
@@ -203,8 +204,10 @@ module Lich
         ''
       end
 
-      # #trigger {pattern} {commands} {class}  |  #trigger clear  (Command.cs:1386)
+      # #trigger {pattern} {commands} {class}  |  #trigger clear  |  #trigger [list]
+      # (Command.cs:1386; bare #trigger lists in Genie).
       def emit_trigger(args)
+        return emit('trigger', 'action' => 'list') if args.length < 2 || args[1].to_s.casecmp?('list')
         return emit('trigger', 'action' => 'clear') if args.length == 2 && args[1].to_s.casecmp?('clear')
         return '' if args.length < 3
 

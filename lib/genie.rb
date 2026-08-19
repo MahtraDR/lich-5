@@ -99,6 +99,13 @@ module Lich
         @stream_filters ||= StreamFilters.new
       end
 
+      # Process-wide trigger registry (Genie #trigger), shared across all Genie
+      # scripts. Triggers fire commands on matching game lines (automation).
+      # @return [Triggers]
+      def triggers
+        @triggers ||= Triggers.new
+      end
+
       private
 
       def truthy?(value)
@@ -159,11 +166,13 @@ require_relative 'genie/reserved'
 require_relative 'genie/variable_file'
 require_relative 'genie/global_store'
 require_relative 'genie/stream_filters'
+require_relative 'genie/triggers'
 require_relative 'genie/variables'
 require_relative 'genie/specials'
 require_relative 'genie/substitution'
 require_relative 'genie/call_stack'
 require_relative 'genie/command_router'
+require_relative 'genie/trigger_runner'
 require_relative 'genie/lexer'
 require_relative 'genie/interpreter'
 require_relative 'genie/engine'

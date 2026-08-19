@@ -125,6 +125,17 @@ RSpec.describe Lich::Genie::CommandRouter do
       expect(hooks).to eq([['trigger', { 'action' => 'clear' }]])
     end
 
+    it '#trigger (bare) and #trigger list emit a list action' do
+      router.route('#trigger')
+      router.route('#trigger list')
+      expect(hooks).to eq([['trigger', { 'action' => 'list' }], ['trigger', { 'action' => 'list' }]])
+    end
+
+    it '#untrigger emits a removal by pattern' do
+      router.route('#untrigger {^You feel ready}')
+      expect(hooks).to eq([['untrigger', { 'pattern' => '^You feel ready' }]])
+    end
+
     it '#gag and #sub emit normalized events (sink applies Model A downstream)' do
       router.route('#gag {a boring line} {spam}')
       router.route('#sub {kobold} {KOBOLD}')
