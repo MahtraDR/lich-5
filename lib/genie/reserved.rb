@@ -7,7 +7,7 @@ module Lich
     #
     # Covers the two structured namespaces the real scripts use heavily:
     #   * $SpellTimer.<Spell>.active / .duration  (dotted object vars)
-    #   * indicator flags ($bleeding, $dead, $standing, ...) via ICONMAP ids
+    #   * indicator flags ($bleeding, $dead, $standing, ...) via Lich check* predicates
     #
     # Spell-name matching is space-insensitive: Genie uses CamelCase ("BlufmorGaraen")
     # while the game/Lich uses spaced names ("Blufmor Garaen").

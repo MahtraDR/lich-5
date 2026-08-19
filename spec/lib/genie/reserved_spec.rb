@@ -32,10 +32,23 @@ RSpec.describe Lich::Genie::Reserved do
   end
 
   describe '.indicator_check' do
-    it 'maps Genie flag names to Lich status predicates' do
-      expect(described_class.indicator_check('bleeding')).to eq(:checkbleeding)
+    it 'maps every Genie status flag to its Lich check* predicate' do
+      {
+        'standing' => :checkstanding, 'kneeling' => :checkkneeling,
+        'sitting' => :checksitting, 'prone' => :checkprone,
+        'bleeding' => :checkbleeding, 'dead' => :checkdead,
+        'hidden' => :checkhidden, 'invisible' => :checkinvisible,
+        'stunned' => :checkstunned, 'webbed' => :checkwebbed,
+        'joined' => :checkgrouped, 'poisoned' => :checkpoison,
+        'diseased' => :checkdisease
+      }.each do |flag, predicate|
+        expect(described_class.indicator_check(flag)).to eq(predicate)
+      end
+    end
+
+    it 'is case-insensitive and nil for unknown flags' do
       expect(described_class.indicator_check('STANDING')).to eq(:checkstanding)
-      expect(described_class.indicator_check('joined')).to eq(:checkgrouped)
+      expect(described_class.indicator_check('Kneeling')).to eq(:checkkneeling)
       expect(described_class.indicator_check('nonsense')).to be_nil
     end
   end
