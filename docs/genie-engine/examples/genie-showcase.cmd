@@ -17,7 +17,8 @@ echo   reserved (live game state):
 echo     $health/$mana/$spirit = $health / $mana / $spirit
 echo     room  = $roomname   exits: $roomexits   north? $north
 echo     hands = L:$lefthand  R:$righthand
-echo     status: standing=$standing kneeling=$kneeling bleeding=$bleeding dead=$dead hidden=$hidden
+echo     position: standing=$standing kneeling=$kneeling sitting=$sitting prone=$prone
+echo     condition: bleeding=$bleeding dead=$dead hidden=$hidden stunned=$stunned
 echo     creatures = $monstercount ($monsterlist)
 echo     spell timer: Ease Burden active=$SpellTimer.EaseBurden.active dur=$SpellTimer.EaseBurden.duration
 echo     specials: unixtime=$unixtime  time=@time24@
