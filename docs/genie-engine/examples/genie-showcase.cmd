@@ -1,77 +1,115 @@
-echo ==========================================================
-echo   GENIE ENGINE, LIVE ON LICH  --  showcase (%scriptname)
-echo   run started at @time@
-echo ==========================================================
+echo ================================================================
+echo   GENIE ENGINE ON LICH -- full showcase (%scriptname) @time@
+echo ================================================================
 timer start
 echo
-echo -- variables and eval() string functions --
-setvariable target You have 42 silver coins
-echo   target      : %target
-eval loud toupper("%target")
-echo   toupper     : %loud
-eval size len("%target")
-echo   length      : %size
-eval hascoins contains("%target", "silver")
-echo   has 'silver': %hascoins
+echo == VARIABLE TYPES ==
+setvariable localvar hello
+echo   local var        : %localvar
+put #var globalvar world
+echo   $global (#var)   : $globalvar
+put #tvar tempvar session-only
+echo   $temp  (#tvar)   : $tempvar
+setvariable colors red|green|blue|violet
+echo   array + .length  : %colors(2) is item 3 of %colors.length
+gosub showargs alpha bravo charlie
+echo   reserved (live game state):
+echo     $health/$mana/$spirit = $health / $mana / $spirit
+echo     room  = $roomname   exits: $roomexits   north? $north
+echo     hands = L:$lefthand  R:$righthand   stance: $stance
+echo     creatures = $monstercount ($monsterlist)
+echo     spell timer: Firewall active=$SpellTimer.Firewall.active dur=$SpellTimer.Firewall.duration
+echo     specials: unixtime=$unixtime  time=@time24@
 echo
-echo -- regex capture with matchre() --
-eval matched matchre("%target", "(\d+) silver")
-echo   matched?    : %matched   (captured number = $1)
+echo == STRING METHODS (eval) ==
+setvariable phrase The quick brown fox
+echo   phrase = "%phrase"
+eval r contains("%phrase", "fox")
+echo   contains fox?      %r
+eval r indexof("%phrase", "brown")
+echo   indexof brown      %r
+eval r lastindexof("%phrase", " ")
+echo   lastindexof space  %r
+eval r startswith("%phrase", "The")
+echo   startswith The     %r
+eval r endswith("%phrase", "fox")
+echo   endswith fox       %r
+eval r len("%phrase")
+echo   len                %r
+eval r toupper("%phrase")
+echo   toupper            %r
+eval r tolower("%phrase")
+echo   tolower            %r
+eval r trim("   padded   ")
+echo   trim               "%r"
+eval r substr("%phrase", 4, 5)
+echo   substr(4,5)        %r
+eval r replace("%phrase", "quick", "slow")
+echo   replace            %r
+eval r replacere("%phrase", "o", "0")
+echo   replacere o->0     %r
+eval r count("%phrase", "o")
+echo   count o            %r
+eval r element("a|b|c|d", 2)
+echo   element(2)         %r
+eval r matchre("%phrase", "(\w+) fox")
+echo   matchre (\w+) fox  %r  (captured $1)
+eval r def("globalvar")
+echo   def globalvar?     %r
 echo
-echo -- arrays --
-setvariable spells fire|ice|lightning|earth
-echo   %spells.length spells; spell #2 is %spells(2)
+echo == ARITHMETIC (evalmath) ==
+evalmath r sqrt(144)
+echo   sqrt(144)          %r
+evalmath r abs(0 - 7)
+echo   abs(-7)            %r
+evalmath r floor(3.9)
+echo   floor(3.9)         %r
+evalmath r ceiling(3.1)
+echo   ceiling(3.1)       %r
+evalmath r round(pi, 2)
+echo   round(pi,2)        %r
+evalmath r max(3, 9, 5)
+echo   max(3,9,5)         %r
+evalmath r min(3, 9, 5)
+echo   min(3,9,5)         %r
+evalmath r 2 ^ 3 ^ 2
+echo   2^3^2 (left-assoc) %r
+evalmath r 17 % 5
+echo   17 mod 5           %r
+evalmath r 17 \ 5
+echo   17 \ 5 (int div)   %r
+evalmath r log(1000)
+echo   log(1000) base-10  %r
+evalmath r round(pi, 4)
+echo   pi to 4 places     %r
 echo
-echo -- math verb and evalmath() (note: ^ is left-assoc) --
-var gold 100
-math gold add 55
-echo   math: 100 + 55 = %gold
-evalmath hyp sqrt(3^2 + 4^2)
-echo   evalmath: sqrt(3^2 + 4^2) = %hyp
+echo == MATH VERB (add/sub/mul/div/mod/set) ==
+var n 20
+math n add 5
+math n subtract 3
+math n multiply 2
+math n divide 4
+math n mod 3
+echo   ((20+5-3)*2/4) mod 3 = %n
 echo
-echo -- fibonacci loop (labels + counter + evalmath) --
-setvariable a 0
-setvariable b 1
-counter set 0
-fib:
-counter add 1
-echo   fib(%c) = %a
-evalmath next %a + %b
-setvariable a %b
-setvariable b %next
-if %c >= 10 then goto fibdone
-goto fib
-fibdone:
-echo
-echo -- block if / else --
+echo == CONTROL FLOW ==
 random 1 6
 echo   rolled %r on a d6
-if %r >= 4 then
-{
-  echo     high roll (>= 4)
-}
-else
-{
-  echo     low roll (< 4)
-}
+if %r = 6 then echo     if/elseif/else: a perfect six!
+elseif %r >= 4 then echo     if/elseif/else: decent (4-5)
+else echo     if/elseif/else: low (1-3)
+counter set 0
+countup:
+counter add 1
+if %c < 3 then goto countup
+echo   goto loop counted to %c
 echo
-echo -- subroutine with an argument --
-gosub greet Elanthia
-echo   (returned from subroutine)
-echo
-echo -- global variable + front-end hook --
-put #var mode showcase
-echo   global variable mode is now '$mode'
-put #highlight cyan Genie
-echo   (emitted a genieHook to highlight 'Genie' for hook-aware front-ends)
-echo
-echo -- async action (register + remove) --
+echo == ASYNC ACTION (register + remove) ==
 action var sensed 1 when you feel a strange sensation
-echo   registered an action (fires on 'you feel a strange sensation')
 action remove you feel a strange sensation
-echo   removed the action
+echo   action registered then removed
 echo
-echo -- live round-trip: put + match / matchre + matchwait --
+echo == LIVE ROUND-TRIP (put + match/matchre + matchwait) ==
 put look
 match roomseen Obvious
 matchre roomseen2 (?i)obvious
@@ -79,32 +117,29 @@ matchwait 3
 echo   (no room line within 3s -- fine for this demo)
 goto donelook
 roomseen:
-echo   room matched via match!
+echo   matched room via match!
 goto donelook
 roomseen2:
-echo   room matched via matchre!
+echo   matched room via matchre!
 donelook:
 echo
-echo -- reserved game-state globals (live from the game) --
-echo   unix time  : $unixtime
-echo   health     : $health
-echo   room       : $roomname
-echo   standing?  : $standing
-echo   bleeding?  : $bleeding
-echo   Firewall   -> active: $SpellTimer.Firewall.active  duration: $SpellTimer.Firewall.duration
-echo
-echo -- include: a helper .cmd loaded at compile time, called via gosub --
+echo == INCLUDE (helper .cmd loaded at compile time) ==
 gosub libgreet Traveler
-echo   libloaded flag is now %libloaded
+echo   libloaded flag = %libloaded
 echo
-echo -- timing --
+echo == TIMING ==
 pause 1
-echo   after a 1s pause, the script timer reads @timer@ s
-echo ==========================================================
-echo   showcase complete -- every verb these scripts use, live in Lich
-echo ==========================================================
+echo   1s pause done; script timer = @timer@ s
+echo ================================================================
+echo   showcase complete -- every variable type and method, live in Lich
+echo ================================================================
 exit
+
+showargs:
+echo   $args: $0  ->  1:$1 2:$2 3:$3
+return
+
 greet:
-echo   Hello, $1! Welcome to the Genie engine.
+echo   Hello, $1!
 return
 include genie-showcase-lib.cmd

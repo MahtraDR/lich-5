@@ -149,36 +149,67 @@ module Lich
       end
     end
 
-    # Resolves Genie reserved global variables from Lich's XMLData (+ clock). Covers
-    # the common set the real scripts use; extend as needed. `$roomplayers` needs
-    # GameObj and is deferred.
+    # Resolves Genie's reserved/live global variables (Genie's SetDefaultGlobalVars
+    # set) from Lich's live game state -- the Lich equivalent of Genie's stream
+    # parser updating those vars. NOT sourced from config files (Genie never saved
+    # reserved vars). User `#var` config is handled separately by the GlobalStore.
+    #
+    # Time-family vars resolve to their @-special literal so the substitution's
+    # @-pass formats them (DRY with Specials). `$roomnote`/`$account`/`$zone*` have
+    # no Lich equivalent and return Genie-like defaults.
     class LichGameState
+      DIRECTIONS = %w[north northeast east southeast south southwest west northwest up down out].freeze
+      TIME_SPECIALS = %w[time time24 militarytime date year month dayofmonth dayofyear
+                         datetime datetime24 unixtime].freeze
+
       RESOLVERS = {
-        'health'           => -> { XMLData.health },
-        'mana'             => -> { XMLData.mana },
-        'stamina'          => -> { XMLData.stamina },
-        'spirit'           => -> { XMLData.spirit },
-        'concentration'    => -> { XMLData.concentration },
-        'maxhealth'        => -> { XMLData.max_health },
-        'maxmana'          => -> { XMLData.max_mana },
-        'maxstamina'       => -> { XMLData.max_stamina },
-        'maxspirit'        => -> { XMLData.max_spirit },
+        # vitals
+        'health' => -> { XMLData.health }, 'mana' => -> { XMLData.mana },
+        'stamina' => -> { XMLData.stamina }, 'spirit' => -> { XMLData.spirit },
+        'concentration' => -> { XMLData.concentration }, 'encumbrance' => -> { XMLData.encumbrance_value },
+        'maxhealth' => -> { XMLData.max_health }, 'maxmana' => -> { XMLData.max_mana },
+        'maxstamina' => -> { XMLData.max_stamina }, 'maxspirit' => -> { XMLData.max_spirit },
         'maxconcentration' => -> { XMLData.max_concentration },
-        'name'             => -> { XMLData.name },
-        'charactername'    => -> { XMLData.name },
-        'game'             => -> { XMLData.game },
-        'level'            => -> { XMLData.level },
-        'stance'           => -> { XMLData.stance_text },
-        'encumbrance'      => -> { XMLData.encumbrance_text },
-        'preparedspell'    => -> { XMLData.prepared_spell },
-        'roomname'         => -> { s = XMLData.room_name.to_s; s.empty? ? XMLData.room_title : s },
-        'roomtitle'        => -> { XMLData.room_title },
-        'roomdesc'         => -> { XMLData.room_description },
-        'roomexits'        => -> { XMLData.room_exits_string },
-        'inside'           => -> { XMLData.room_inside ? 1 : 0 },
-        'roundtime'        => -> { [XMLData.roundtime_end.to_i - Time.now.to_i, 0].max },
-        'unixtime'         => -> { Time.now.to_i }
-      }.freeze
+        # character / connection
+        'name' => -> { XMLData.name }, 'charactername' => -> { XMLData.name },
+        'game' => -> { XMLData.game }, 'gamename' => -> { XMLData.game },
+        'gamehost' => -> { 'eaccess.play.net' }, 'gameport' => -> { 7910 },
+        'account' => -> { '' }, 'level' => -> { XMLData.level },
+        'connected' => -> { 1 }, 'client' => -> { 'Lich' },
+        'version' => -> { defined?(LICH_VERSION) ? LICH_VERSION : '' },
+        # state
+        'stance' => -> { XMLData.stance_text }, 'preparedspell' => -> { XMLData.prepared_spell },
+        'roundtime' => -> { [XMLData.roundtime_end.to_i - Time.now.to_i, 0].max },
+        'casttime' => -> { [XMLData.cast_roundtime_end.to_i - Time.now.to_i, 0].max },
+        'casttimeremaining' => -> { [XMLData.cast_roundtime_end.to_i - Time.now.to_i, 0].max },
+        'gametime' => -> { XMLData.server_time },
+        # hands
+        'lefthand' => -> { GameObj.left_hand&.name || 'Empty' },
+        'lefthandnoun' => -> { GameObj.left_hand&.noun.to_s },
+        'righthand' => -> { GameObj.right_hand&.name || 'Empty' },
+        'righthandnoun' => -> { GameObj.right_hand&.noun.to_s },
+        # room
+        'roomname' => -> { s = XMLData.room_name.to_s; s.empty? ? XMLData.room_title : s },
+        'roomtitle' => -> { XMLData.room_title }, 'roomdesc' => -> { XMLData.room_description },
+        'roomexits' => -> { XMLData.room_exits_string }, 'gameroomid' => -> { XMLData.room_id },
+        'roomobjs' => -> { Array(GameObj.loot).map(&:name).join('|') },
+        'roomplayers' => -> { Array(GameObj.pcs).map(&:name).join('|') },
+        'roomnote' => -> { '' }, 'inside' => -> { XMLData.room_inside ? 1 : 0 },
+        # creatures
+        'monstercount' => -> { Array(GameObj.npcs).length },
+        'monsterlist' => -> { Array(GameObj.npcs).map(&:name).join('|') },
+        # misc reserved
+        'prompt' => -> { XMLData.prompt }, 'zoneid' => -> { 0 }, 'zonename' => -> { 0 },
+        'scriptlist' => -> { 'none' }, 'spelltime' => -> { 0 }, 'spellpreptime' => -> { 0 },
+        'repeatregex' => lambda {
+          '^\.\.\.wait|^Sorry\, you may only type ahead|^You are still stunned|' \
+          '^You can\'t do that while|^You don\'t seem to be able'
+        }
+      }.merge(
+        DIRECTIONS.to_h { |dir| [dir, -> { Array(XMLData.room_exits).include?(dir) ? 1 : 0 }] }
+      ).merge(
+        TIME_SPECIALS.to_h { |token| [token, -> { "@#{token}@" }] }
+      ).freeze
 
       def key?(name)
         key = name.to_s.downcase

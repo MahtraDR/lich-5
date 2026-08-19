@@ -26,7 +26,9 @@ module Lich
         'standing'  => 'IconSTANDING',
         'stunned'   => 'IconSTUNNED',
         'webbed'    => 'IconWEBBED',
-        'joined'    => 'IconJOINED'
+        'joined'    => 'IconJOINED',
+        'poisoned'  => 'IconPOISONED',
+        'diseased'  => 'IconDISEASED'
       }.freeze
 
       module_function
