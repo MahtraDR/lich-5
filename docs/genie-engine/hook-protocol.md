@@ -111,9 +111,12 @@ These are emitted by `lib/genie/command_router.rb` (the `Core/Command.cs` port) 
   "name":"@windowsize@"}`.
 
 > **Model A note (Decision 6):** `gag`/`ungag`/`substitute`/`unsub` are *normalized events* the Lich
-> **sink** consumes to install a `DownstreamHook` (stream-side rewrite), NOT rendered `<genieHook>`
-> tags. They share this catalog's shape so the engine emits one event type; the sink chooses the
-> transport. All other ops here ride the `<genieHook>` stream.
+> **sink** (`LichHookSink`) consumes to update a process-wide `StreamFilters` registry backed by a
+> single Lich `DownstreamHook` (stream-side rewrite), NOT rendered `<genieHook>` tags. They share this
+> catalog's shape so the engine emits one event type; the sink chooses the transport. The hook runs
+> after the raw line is already in `$_SERVERBUFFER_`, so reget/log.lic/other scripts see the original
+> — only the client display is filtered. Patterns are Genie regexes (invalid → literal); class-gating
+> of a gag/sub is not yet modeled (filters apply unconditionally). All other ops ride `<genieHook>`.
 
 Engine-side `#commands` (`#var`/`#tvar`/`#svar`/`#unvar`, `#eval`/`#evalmath`/`#math`/`#if`, `#send`)
 execute inside Lich and emit **no** hook. An inline `#function` used as a value (e.g. `#var t

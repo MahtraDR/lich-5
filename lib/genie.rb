@@ -75,6 +75,13 @@ module Lich
         @global_store = nil
       end
 
+      # Process-wide gag/substitute registry (Model A, Decision 6), shared across
+      # all Genie scripts and applied on the client-bound downstream stream.
+      # @return [StreamFilters]
+      def stream_filters
+        @stream_filters ||= StreamFilters.new
+      end
+
       private
 
       def truthy?(value)
@@ -130,6 +137,7 @@ require_relative 'genie/eval'
 require_relative 'genie/reserved'
 require_relative 'genie/variable_file'
 require_relative 'genie/global_store'
+require_relative 'genie/stream_filters'
 require_relative 'genie/variables'
 require_relative 'genie/specials'
 require_relative 'genie/substitution'

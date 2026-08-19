@@ -137,10 +137,35 @@ module Lich
       end
     end
 
-    # Emits a front-end effect as a <genieHook> tag on the client stream. Front-ends
-    # that do not implement the protocol safely ignore the unknown tag.
+    # Consumes the interpreter's normalized front-end effect events. Most emit a
+    # <genieHook> tag on the client stream (front-ends that don't implement the
+    # protocol safely ignore the unknown tag). gag/sub are instead applied as a Lich
+    # DownstreamHook (Model A, Decision 6) -- stream-side, universal, non-destructive.
     class LichHookSink
+      MODEL_A_OPS = %w[gag ungag substitute unsub].freeze
+
       def emit(op, payload)
+        return apply_stream_filter(op, payload) if MODEL_A_OPS.include?(op)
+
+        emit_tag(op, payload)
+      end
+
+      private
+
+      def apply_stream_filter(op, payload)
+        filters = Lich::Genie.stream_filters
+        filters.ensure_hook_installed
+        case op
+        when 'gag' then filters.add_gag(payload['pattern'], klass: payload['class'])
+        when 'ungag' then filters.remove_gag(payload['pattern'])
+        when 'substitute' then filters.add_sub(payload['pattern'], payload['replacement'], klass: payload['class'])
+        when 'unsub' then filters.remove_sub(payload['pattern'])
+        end
+      rescue StandardError
+        nil
+      end
+
+      def emit_tag(op, payload)
         return unless defined?($_CLIENT_) && $_CLIENT_&.alive?
 
         $_CLIENT_.puts(%(<genieHook v="1" op="#{op}" data='#{JSON.generate(payload)}'/>))
