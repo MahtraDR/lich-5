@@ -18,7 +18,7 @@ module Lich
     # Genie's "swallow and default" behavior (e.g. `evalmath`) rescue this.
     class Error < StandardError; end
 
-    @enabled = nil
+    @enabled_by_key = nil
     @config_dir = nil
     @global_store = nil
 
@@ -26,10 +26,20 @@ module Lich
       # Whether the Genie engine is active for `.cmd` scripts. Persisted
       # PER-CHARACTER in lich.db3 (survives relogin and reset-to-branch; other
       # characters are unaffected, so their WizardScript `.cmd`/`.wiz` keep working).
+      #
+      # The per-character key (`genie_enabled:<game>:<char>`) is derived from live
+      # XMLData, which is EMPTY until the character stream arrives. So we cache per
+      # resolved key and, crucially, do NOT cache a lookup made before login (empty
+      # game/char) -- otherwise a premature check would memoize a false "off" that
+      # never re-reads, and the toggle would appear not to persist across relogs.
       # @return [Boolean]
       def enabled?
-        @enabled = load_enabled if @enabled.nil?
-        @enabled == true
+        key = settings_key
+        return read_enabled(key) unless character_scoped? # pre-login: read live, never cache
+
+        @enabled_by_key ||= {}
+        @enabled_by_key[key] = read_enabled(key) unless @enabled_by_key.key?(key)
+        @enabled_by_key[key] == true
       end
 
       # @return [Boolean]
@@ -39,8 +49,15 @@ module Lich
 
       # @param value [Object] truthy value (true/on/yes/1) enables the engine
       def enabled=(value)
-        @enabled = truthy?(value)
-        save_enabled(@enabled)
+        on = truthy?(value)
+        (@enabled_by_key ||= {})[settings_key] = on
+        write_enabled(settings_key, on)
+      end
+
+      # Drop the per-character enabled cache (test/administrative).
+      # @return [void]
+      def reset_enabled_cache!
+        @enabled_by_key = nil
       end
 
       # Root of the Genie config tree (mirrors Genie's layout). Defaults to
@@ -90,9 +107,13 @@ module Lich
 
       # Per-character key so enabling on one character never affects others.
       def settings_key
-        game = safe_xml(:game)
-        char = safe_xml(:name)
-        "genie_enabled:#{game}:#{char}"
+        "genie_enabled:#{safe_xml(:game)}:#{safe_xml(:name)}"
+      end
+
+      # True once the character stream has populated both game and name, so the
+      # per-character key actually identifies a character (not `genie_enabled::`).
+      def character_scoped?
+        !safe_xml(:game).empty? && !safe_xml(:name).empty?
       end
 
       def safe_xml(attribute)
@@ -109,19 +130,19 @@ module Lich
         false
       end
 
-      def load_enabled
+      def read_enabled(key)
         return false unless persistence_available?
 
-        truthy?(Lich.db.get_first_value('SELECT value FROM lich_settings WHERE name=?;', [settings_key]))
+        truthy?(Lich.db.get_first_value('SELECT value FROM lich_settings WHERE name=?;', [key]))
       rescue StandardError
         false
       end
 
-      def save_enabled(value)
+      def write_enabled(key, value)
         return unless persistence_available?
 
         Lich.db.execute('CREATE TABLE IF NOT EXISTS lich_settings (name TEXT NOT NULL, value TEXT, PRIMARY KEY(name));')
-        Lich.db.execute('INSERT OR REPLACE INTO lich_settings(name,value) values(?,?);', [settings_key, value.to_s])
+        Lich.db.execute('INSERT OR REPLACE INTO lich_settings(name,value) values(?,?);', [key, value.to_s])
       rescue StandardError
         nil
       end
