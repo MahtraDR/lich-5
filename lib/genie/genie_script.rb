@@ -181,16 +181,38 @@ module Lich
       }.freeze
 
       def key?(name)
-        RESOLVERS.key?(name.to_s.downcase)
+        key = name.to_s.downcase
+        RESOLVERS.key?(key) || !Reserved.indicator_id(key).nil? || Reserved.spell_timer?(name)
       end
 
       def [](name)
-        resolver = RESOLVERS[name.to_s.downcase]
-        return nil unless resolver
-
-        resolver.call.to_s
+        key = name.to_s.downcase
+        if (resolver = RESOLVERS[key])
+          resolver.call.to_s
+        elsif (icon = Reserved.indicator_id(key))
+          XMLData.indicator[icon] == 'y' ? '1' : '0'
+        elsif Reserved.spell_timer?(name)
+          Reserved.spell_timer(active_spells, name).to_s
+        end
       rescue StandardError
         nil
+      end
+
+      private
+
+      # Active-spell map for SpellTimer resolution: DR uses dr_active_spells directly
+      # (name => duration); GemStone derives an equivalent from Effects::Spells.
+      def active_spells
+        if XMLData.game.to_s.start_with?('DR')
+          XMLData.dr_active_spells || {}
+        else
+          registry = Lich::Gemstone::Effects::Spells
+          registry.to_h.each_with_object({}) do |(effect, _exp), acc|
+            next unless effect.is_a?(String) && registry.active?(effect)
+
+            acc[effect] = registry.time_left(effect).to_i
+          end
+        end
       end
     end
   end

@@ -86,9 +86,12 @@ echo   room matched via matchre!
 donelook:
 echo
 echo -- reserved game-state globals (live from the game) --
-echo   unix time : $unixtime
-echo   health    : $health
-echo   room      : $roomname
+echo   unix time  : $unixtime
+echo   health     : $health
+echo   room       : $roomname
+echo   standing?  : $standing
+echo   bleeding?  : $bleeding
+echo   Firewall   -> active: $SpellTimer.Firewall.active  duration: $SpellTimer.Firewall.duration
 echo
 echo -- include: a helper .cmd loaded at compile time, called via gosub --
 gosub libgreet Traveler
