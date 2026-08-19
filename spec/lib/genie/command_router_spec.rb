@@ -1,0 +1,142 @@
+# frozen_string_literal: true
+
+require_relative '../../../lib/genie'
+
+RSpec.describe Lich::Genie::CommandRouter do
+  let(:vars) { Lich::Genie::Variables.new }
+  let(:evaluator) { Lich::Genie::Eval.new(globals: globals_adapter) }
+  let(:globals_adapter) do
+    Object.new.tap { |o| o.define_singleton_method(:key?) { |name| vars.global_key?(name) } }
+  end
+  let(:echoes) { [] }
+  let(:sends) { [] }
+  let(:hooks) { [] }
+  let(:hook_sink) do
+    collected = hooks
+    Object.new.tap { |o| o.define_singleton_method(:emit) { |op, payload| collected << [op, payload] } }
+  end
+  let(:router) do
+    described_class.new(
+      vars: vars, eval: evaluator, hooks: hook_sink,
+      echo: ->(t) { echoes << t }, send: ->(t) { sends << t }
+    )
+  end
+
+  describe 'engine-side variables' do
+    it 'sets and persists a #var' do
+      router.route('#var mode hunt')
+      expect(vars.global_get('mode')).to eq('hunt')
+    end
+
+    it 'evaluates an inline #evalmath in a #var value (the 275x corpus pattern)' do
+      router.route('#var timer #evalmath (100 + 20)')
+      expect(vars.global_get('timer')).to eq('120')
+    end
+
+    it 'evaluates an inline #eval in a #var value' do
+      router.route('#var flag #eval (3 > 1)')
+      expect(vars.global_get('flag')).to eq('1')
+    end
+
+    it 'strips braces around a #var value like Genie ParseArgs' do
+      router.route('#var greeting {hello there}')
+      expect(vars.global_get('greeting')).to eq('hello there')
+    end
+
+    it '#tvar does not persist but is readable in-session' do
+      router.route('#tvar scratch 7')
+      expect(vars.global_get('scratch')).to eq('7')
+    end
+
+    it 'deletes a var with #unvar' do
+      router.route('#var doomed 1')
+      router.route('#unvar doomed')
+      expect(vars.global_get('doomed')).to be_nil
+    end
+  end
+
+  describe 'engine-side computation' do
+    it 'sends the result of a top-level #evalmath to the game' do
+      router.route('#evalmath (6 * 7)')
+      expect(sends).to eq(['42'])
+    end
+
+    it '#math applies keyword arithmetic into a global' do
+      router.route('#var n 5')
+      router.route('#math n add 10')
+      expect(vars.global_get('n')).to eq('15')
+    end
+
+    it '#if routes the then-branch when true and the else-branch when false' do
+      router.route('#if {1 > 0} {#var picked then} {#var picked else}')
+      expect(vars.global_get('picked')).to eq('then')
+      router.route('#if {1 > 2} {#var picked then} {#var picked else}')
+      expect(vars.global_get('picked')).to eq('else')
+    end
+
+    it '#if sends a plain then-branch to the game' do
+      router.route('#if {1 = 1} {attack} {flee}')
+      expect(sends).to eq(['attack'])
+    end
+  end
+
+  describe 'engine-side echo' do
+    it 'echoes plain text locally' do
+      router.route('#echo hello world')
+      expect(echoes).to eq(['hello world'])
+      expect(hooks).to be_empty
+    end
+
+    it 'routes #echo >window to a front-end echo hook' do
+      router.route('#echo >thoughts pathing to bank')
+      expect(hooks).to eq([['echo', { 'window' => 'thoughts', 'text' => 'pathing to bank' }]])
+    end
+  end
+
+  describe 'front-end effects (structured payloads)' do
+    it '#class name on|off emits a structured enable/disable' do
+      router.route('#class recovery on')
+      router.route('#class bgstart off')
+      expect(hooks).to eq([
+                            ['class', { 'name' => 'recovery', 'enabled' => true }],
+                            ['class', { 'name' => 'bgstart', 'enabled' => false }]
+                          ])
+    end
+
+    it '#class +a -b toggles multiple classes' do
+      router.route('#class +combat -idle')
+      expect(hooks).to eq([
+                            ['class', { 'name' => 'combat', 'enabled' => true }],
+                            ['class', { 'name' => 'idle', 'enabled' => false }]
+                          ])
+    end
+
+    it '#trigger emits pattern/commands/class' do
+      router.route('#trigger {^You feel ready} {#var dbtimer 0;#class db off} {db}')
+      expect(hooks).to eq([['trigger', {
+        'pattern'  => '^You feel ready',
+        'commands' => '#var dbtimer 0;#class db off',
+        'class'    => 'db'
+      }]])
+    end
+
+    it '#trigger clear emits a clear action' do
+      router.route('#trigger clear')
+      expect(hooks).to eq([['trigger', { 'action' => 'clear' }]])
+    end
+
+    it '#gag and #sub emit normalized events (sink applies Model A downstream)' do
+      router.route('#gag {a boring line} {spam}')
+      router.route('#sub {kobold} {KOBOLD}')
+      expect(hooks).to eq([
+                            ['gag', { 'pattern' => 'a boring line', 'class' => 'spam' }],
+                            ['substitute', { 'pattern' => 'kobold', 'replacement' => 'KOBOLD', 'class' => '' }]
+                          ])
+    end
+
+    it 'emits unknown/tokenized front-end ops with args + raw' do
+      router.route('#macro {ctrl+a} {attack}')
+      expect(hooks).to eq([['macro', { 'args' => ['ctrl+a', 'attack'], 'raw' => '{ctrl+a} {attack}' }]])
+    end
+  end
+end

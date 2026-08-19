@@ -24,6 +24,29 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   `%local` and `$global` are separate namespaces (not a fallback chain); undefined vars are
   left literal; array `%x(i)` + `%x.length`; the naive `$1`-also-hits-`$10` replace quirk.
 
+## `#command` router (Core/Command.cs port)
+- **A `#command`'s *value* is re-parsed as a command** (`ParseAllArgs` → `ParseCommand`,
+  Command.cs:943). So `#var t #evalmath ($unixtime + 5)` **evaluates** the inline `#evalmath` and
+  stores the number — do NOT store the literal. Only the *function* commands (`#eval`, `#evalmath`,
+  `#if`) return a result string; side-effect commands (`#var`, `#class`, `#echo`) return `""`. A
+  top-level `#command`'s non-empty result is then **sent to the game** ("get result from function
+  then send result to game", Command.cs:262).
+- **Args use `Utility.ParseArgs`** (our `Text.parse_args`): `{...}` brace groups + `"..."` quotes are
+  stripped, so `#trigger {re} {cmds} {class}` → `["trigger", re, cmds, class]` and `#class name on`
+  splits cleanly. `#trigger` = `{pattern}{commands}{class?}` (Command.cs:1442, AddTrigger order);
+  `#class name on|off` or `#class +a -b` (Command.cs:1254).
+- **Engine vs front-end split lives in the router, not the lexer.** `put #x` is lexed as a normal
+  `put`; the *value* (post-substitution) starting with `#` is what routes. So variable substitution
+  (incl. `\\$` → literal `$` escaping) has already run — passing the substituted arg is correct, and
+  escaped `$vars` in trigger bodies survive for the front-end to evaluate.
+- **`gag`/`sub` are emitted as normalized events, not `<genieHook>` tags** — the sink installs a
+  DownstreamHook (Decision 6). The router still emits them via `hooks.emit` (one event channel); the
+  sink picks the transport.
+- **Loop guard only counts game sends**, so a pure-FE/config script (all `#class`/`#trigger`/`#var`,
+  no `put <text>`) that `goto`s itself will spin forever — the include idiom `goto
+  %<caller-return-label>` MUST be driven by a caller that sets the return label (standalone dry-runs
+  must inject a terminal label). Potential fidelity gap vs Genie's row-count runaway detection.
+
 ## DR game-state (the big surprises)
 - **`XMLData` is shared GS/DR.** DR-specific state lives in DR modules.
 - **DR `room_title` is DOUBLE-bracketed**: `"[[Bosque Deriel, Burial Ground]]"`

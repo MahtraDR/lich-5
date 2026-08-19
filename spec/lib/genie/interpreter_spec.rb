@@ -198,7 +198,7 @@ RSpec.describe Lich::Genie::Interpreter do
         exit
       GENIE
       result = run_script(source)
-      expect(result[:hooks]).to eq([['highlight', { 'raw' => 'red kobold' }]])
+      expect(result[:hooks]).to eq([['highlight', { 'args' => %w[red kobold], 'raw' => 'red kobold' }]])
       expect(result[:commands]).to be_empty
     end
 
@@ -209,6 +209,44 @@ RSpec.describe Lich::Genie::Interpreter do
         exit
       GENIE
       expect(run_script(source)[:echoes]).to eq(['mode is hunt'])
+    end
+
+    it 'evaluates an inline #evalmath over a reserved var into a #var (corpus pattern)' do
+      source = <<~GENIE
+        put #var hpsnapshot #evalmath ($health + 5)
+        echo snapshot is $hpsnapshot
+        exit
+      GENIE
+      result = run_script(source, game_state: { 'health' => '75' })
+      expect(result[:echoes]).to eq(['snapshot is 80'])
+    end
+
+    it 'emits structured class + trigger hooks like commoncombattriggers.cmd' do
+      source = <<~GENIE
+        put #class recovery on
+        put #trigger {^You're unconscious} {#send .uncon} {recovery}
+        put #class bgstart off
+        exit
+      GENIE
+      result = run_script(source)
+      expect(result[:hooks]).to eq([
+                                     ['class', { 'name' => 'recovery', 'enabled' => true }],
+                                     ['trigger', { 'pattern' => "^You're unconscious",
+                                                   'commands' => '#send .uncon', 'class' => 'recovery' }],
+                                     ['class', { 'name' => 'bgstart', 'enabled' => false }]
+                                   ])
+      expect(result[:commands]).to be_empty
+    end
+
+    it 'routes a #command fired from within an async action' do
+      source = <<~GENIE
+        action #class panic on when you are bleeding
+        match ok all clear
+        matchwait 1
+        exit
+      GENIE
+      result = run_script(source, input_lines: ['you are bleeding badly'])
+      expect(result[:hooks]).to eq([['class', { 'name' => 'panic', 'enabled' => true }]])
     end
   end
 end

@@ -49,6 +49,11 @@ module Lich
         resolved_specials = specials || Specials.new(timer_elapsed: -> { @timer_start ? now - @timer_start : 0 })
         @substitution = Substitution.new(variables: @vars, specials: resolved_specials)
         @eval = Eval.new(globals: GlobalsAdapter.new(@vars))
+        @router = CommandRouter.new(
+          vars: @vars, eval: @eval, hooks: @hooks,
+          echo: ->(text) { echo_line(text) },
+          send: ->(text) { send_text(text) }
+        )
         @state = :running
         @match_list = []
         @actions = []
@@ -192,7 +197,7 @@ module Lich
       def do_put(arg)
         return if arg.strip.empty?
 
-        arg.start_with?('#') ? route_command(arg) : send_text(arg)
+        arg.start_with?('#') ? @router.route(arg) : send_text(arg)
       end
 
       def send_text(text)
@@ -216,27 +221,6 @@ module Lich
         echo_line("[Script error: possible infinite loop detected: #{@name}]")
         finish
         true
-      end
-
-      # Route a `#command` (front-end bar command) issued via put.
-      def route_command(text)
-        body = text.sub(/\A#/, '')
-        keyword = Text.keyword_string(body).downcase
-        argument = Text.argument_string(body)
-
-        case keyword
-        when 'var', 'setvar', 'setvariable', 'variable', 'svar', 'servervar'
-          # #var/#svar persist to variables.cfg; #svar is emulated as persistent for now.
-          @vars.global_set(Text.keyword_string(argument), Text.argument_string(argument), persist: true)
-        when 'tvar', 'tempvar'
-          @vars.global_set(Text.keyword_string(argument), Text.argument_string(argument), persist: false)
-        when 'unvar', 'unsetvar', 'unsetvariable', 'unvariable'
-          @vars.global_delete(argument.strip)
-        when 'echo'
-          echo_line(argument)
-        else
-          @hooks&.emit(keyword, { 'raw' => argument })
-        end
       end
 
       # --- control flow -----------------------------------------------------
@@ -523,6 +507,11 @@ module Lich
         commands.to_s.split(';').each do |raw|
           command = raw.strip.gsub(/\$(\d+)/) { match[Regexp.last_match(1).to_i].to_s }
           next if command.empty?
+
+          if command.start_with?('#')
+            @router.route(substitute(command))
+            next
+          end
 
           keyword = Text.keyword_string(command).downcase
           argument = Text.argument_string(command)

@@ -6,9 +6,11 @@ shareable contract for the front-end effects a Genie script can trigger. Lich ru
 gauges, colors, sounds, echo-to-window), Lich emits a `<genieHook>` event carrying the full Genie
 semantics. Lich renders nothing itself and contains no front-end-specific code.
 
-> Status: **framework defined; per-op payload catalog filled during Phase 4** (after extracting
-> Genie's `Core/Command.cs` front-end handlers). Op names below are the target set; payload
-> fields are authoritative only once marked ✅.
+> Status: **framework defined; per-op payload catalog being filled (Phase 4 in progress).** The
+> corpus-dominant ops (`class`, `trigger`, `gag`, `substitute`, `echo`) are finalized ✅ from
+> Genie's `Core/Command.cs` handlers and covered by the `CommandRouter` port + specs; the rest are
+> still emitted as tokenized `{args, raw}` (⏳) until their handlers are extracted. Op names below
+> are the target set; payload fields are authoritative only once marked ✅.
 
 ## Design goals
 1. **Front-end agnostic.** No assumptions about a front-end's widget model. Hooks describe
@@ -51,11 +53,12 @@ Derived from Genie's front-end bar-commands (`Core/Command.cs`). Grouped by conc
 |---|---|---|---|
 | `highlight` | `highlight`, `unhighlight` | add/remove a highlight (pattern, color, class, regex/literal, match scope, sound) | ⏳ |
 | `preset` | `preset` | named color preset / class-based text coloring | ⏳ |
-| `class` | `class` | enable/disable a named class (gates highlights/actions) | ⏳ |
+| `class` | `class` | enable/disable a named class (gates highlights/actions) | ✅ |
 | `window` | `window` | create/show/hide/clear a named window/stream | ⏳ |
-| `echo` | `echo <window>` | echo text into a named window (vs main) | ⏳ |
-| `gag` | `gag`/`ignore`, `ungag` | suppress lines matching a pattern | ⏳ |
-| `substitute` | `sub`/`substitute` | rewrite matching text | ⏳ |
+| `echo` | `echo >window` | echo text into a named window (vs main) | ✅ |
+| `gag` / `ungag` | `gag`/`ignore`/`squelch`, `ungag` | suppress lines matching a pattern | ✅ |
+| `substitute` / `unsub` | `sub`/`substitute`, `unsub` | rewrite matching text | ✅ |
+| `trigger` | `trigger` | register/clear a regex trigger → command(s), optional class | ✅ |
 | `gauge` | (Genie gauges) | bind a gauge/bar to a variable/value | ⏳ |
 | `variable` | `var` (display-relevant) | surface a named/string variable for on-screen display | ⏳ |
 | `macro` | `macro` | define a hotkey → command(s) | ⏳ |
@@ -66,6 +69,30 @@ Derived from Genie's front-end bar-commands (`Core/Command.cs`). Grouped by conc
 | `layout` | `layout` | apply a named layout | ⏳ |
 
 Legend: ✅ finalized · ⏳ payload TBD (Phase 4).
+
+## Finalized payloads (✅)
+These are emitted by `lib/genie/command_router.rb` (the `Core/Command.cs` port) and asserted in
+`spec/lib/genie/command_router_spec.rb`. Fields are authoritative.
+
+- **`class`** — `{"name": <string, lowercased>, "enabled": <bool>}`. One hook per class token, so
+  `#class +a -b` emits two. `#class name on|true|1` → enabled; `off|false|0` → disabled.
+- **`trigger`** — add: `{"pattern": <regex string>, "commands": <string>, "class": <string, "" if
+  omitted>}`; clear: `{"action": "clear"}`. `commands` is the raw Genie command string (may contain
+  its own `#…`/`;`-separated commands) for the front-end's trigger engine to run — Lich does not
+  execute it. Escaped `\\$var` in Genie source arrives here as a literal `$var` (front-end-evaluated).
+- **`echo`** — `{"window": <string>, "text": <string>}` for `#echo >window text`. Plain `#echo text`
+  is a **local** echo (not a hook).
+- **`gag` / `ungag`** — `{"pattern": <string>, "class": <string>}`.
+- **`substitute` / `unsub`** — `{"pattern": <string>, "replacement": <string>, "class": <string>}`.
+
+> **Model A note (Decision 6):** `gag`/`ungag`/`substitute`/`unsub` are *normalized events* the Lich
+> **sink** consumes to install a `DownstreamHook` (stream-side rewrite), NOT rendered `<genieHook>`
+> tags. They share this catalog's shape so the engine emits one event type; the sink chooses the
+> transport. All other ops here ride the `<genieHook>` stream.
+
+Engine-side `#commands` (`#var`/`#tvar`/`#svar`/`#unvar`, `#eval`/`#evalmath`/`#math`/`#if`, `#send`)
+execute inside Lich and emit **no** hook. An inline `#function` used as a value (e.g. `#var t
+#evalmath ($unixtime + 5)`) is evaluated by the engine, matching Genie's `ParseAllArgs` recursion.
 
 ## Example (illustrative — fields not yet authoritative)
 ```
