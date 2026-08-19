@@ -42,10 +42,31 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
 - **`gag`/`sub` are emitted as normalized events, not `<genieHook>` tags** — the sink installs a
   DownstreamHook (Decision 6). The router still emits them via `hooks.emit` (one event channel); the
   sink picks the transport.
-- **Loop guard only counts game sends**, so a pure-FE/config script (all `#class`/`#trigger`/`#var`,
-  no `put <text>`) that `goto`s itself will spin forever — the include idiom `goto
-  %<caller-return-label>` MUST be driven by a caller that sets the return label (standalone dry-runs
-  must inject a terminal label). Potential fidelity gap vs Genie's row-count runaway detection.
+- **Two runaway guards, both ported.** (1) send-history: 10 same / 30 total game sends in 10s
+  (Script.cs:4390). (2) **per-run wall-clock deadline** (`SCRIPT_TIMEOUT_SECONDS`=5s, Genie
+  `Config.iScriptTimeout`=5000, Script.cs:1857): a continuous row loop that never yields to a
+  wait/send — e.g. a pure-FE `#class`/`#trigger`/`#var` config block that `goto`s its own
+  include-return label — trips this even with zero game sends. Reset the deadline at each `run_rows`
+  entry (= Genie resetting oTimerStart per RunScript; a wait resumes into a fresh run). The include
+  idiom `goto %<caller-return-label>` still needs a caller that sets the label; standalone dry-runs
+  inject a terminal label (see spec/fixtures/genie + fixtures_spec).
+- **`#command` arg formats (Command.cs runtime handlers, all ported to command_router.rb):**
+  `#trigger {pat}{cmds}{class?}`; `#class name on|off` or `#class +a -b`; `#highlight {line|string|
+  beginswith|regex} {color} {pattern...} [case] [sound] [class] [active]` (+`clear`; **pattern is
+  greedy to EOL** — `ArrayToString(oArgs,3)` — so trailing fields only work with a single braced
+  pattern; a bare `#highlight red foo` is a LIST/display and emits nothing); `#preset {name}{value}`;
+  `#window {add|show|position|remove|close|hide} {name} [dims]` (add/show dims are hardcoded
+  300x200@10,10); `#macro/#alias {a}{b}` + `#unmacro/#unalias {a}`; `#name {value} {targets...}`
+  (one Add per target, key=name val=value) + `#unname {names...}`; `#play/#playwave/#playsound
+  <file>|stop` (uses the arg STRING, not tokens); `#link [>win] {text}{cmd}`; `#img [>win][w:N][h:N]
+  {file}` (order-independent tokens); `#beep/#bell`+`#flash` (no args); `#layout {load|save}{name}`.
+  **No Genie handler exists for `#unhighlight` (use `#highlight clear`) or `#gauge`** — do not invent.
+- **gag/sub = Model A DownstreamHook, NOT a hook tag** (Decision 6). The interpreter emits normalized
+  `gag`/`ungag`/`substitute`/`unsub` events; `LichHookSink` routes them to a process-wide
+  `StreamFilters` (lib/genie/stream_filters.rb) behind ONE persist:true `DownstreamHook`. `DownstreamHook.add`
+  needs a **Proc** (a `Method` is rejected by `HookRegistry#add`) — pass `->(line){apply(line)}`. A hook
+  returning `nil` suppresses the line; a String rewrites it. Runs after `$_SERVERBUFFER_`, so
+  reget/log/other scripts keep the original.
 
 ## DR game-state (the big surprises)
 - **`XMLData` is shared GS/DR.** DR-specific state lives in DR modules.
