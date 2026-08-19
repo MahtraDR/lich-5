@@ -18,17 +18,29 @@ module Lich
     # Genie's "swallow and default" behavior (e.g. `evalmath`) rescue this.
     class Error < StandardError; end
 
-    @enabled = false
+    @enabled = nil
     @config_dir = nil
     @global_store = nil
 
     class << self
-      # @return [Boolean] whether the Genie engine is active for `.cmd` scripts
-      attr_accessor :enabled
-
+      # Whether the Genie engine is active for `.cmd` scripts. Persisted
+      # PER-CHARACTER in lich.db3 (survives relogin and reset-to-branch; other
+      # characters are unaffected, so their WizardScript `.cmd`/`.wiz` keep working).
       # @return [Boolean]
       def enabled?
+        @enabled = load_enabled if @enabled.nil?
         @enabled == true
+      end
+
+      # @return [Boolean]
+      def enabled
+        enabled?
+      end
+
+      # @param value [Object] truthy value (true/on/yes/1) enables the engine
+      def enabled=(value)
+        @enabled = truthy?(value)
+        save_enabled(@enabled)
       end
 
       # Root of the Genie config tree (mirrors Genie's layout). Defaults to
@@ -61,6 +73,50 @@ module Lich
       # @return [void]
       def reset_global_store!
         @global_store = nil
+      end
+
+      private
+
+      def truthy?(value)
+        value.to_s =~ /\A(1|on|true|yes)\z/i ? true : false
+      end
+
+      # Per-character key so enabling on one character never affects others.
+      def settings_key
+        game = safe_xml(:game)
+        char = safe_xml(:name)
+        "genie_enabled:#{game}:#{char}"
+      end
+
+      def safe_xml(attribute)
+        return '' unless defined?(XMLData) && XMLData.respond_to?(attribute)
+
+        XMLData.public_send(attribute).to_s
+      rescue StandardError
+        ''
+      end
+
+      def persistence_available?
+        defined?(Lich) && Lich.respond_to?(:db) && Lich.db
+      rescue StandardError
+        false
+      end
+
+      def load_enabled
+        return false unless persistence_available?
+
+        truthy?(Lich.db.get_first_value('SELECT value FROM lich_settings WHERE name=?;', [settings_key]))
+      rescue StandardError
+        false
+      end
+
+      def save_enabled(value)
+        return unless persistence_available?
+
+        Lich.db.execute('CREATE TABLE IF NOT EXISTS lich_settings (name TEXT NOT NULL, value TEXT, PRIMARY KEY(name));')
+        Lich.db.execute('INSERT OR REPLACE INTO lich_settings(name,value) values(?,?);', [settings_key, value.to_s])
+      rescue StandardError
+        nil
       end
     end
   end
