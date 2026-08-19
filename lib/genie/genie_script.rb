@@ -188,16 +188,16 @@ module Lich
         'lefthandnoun' => -> { GameObj.left_hand&.noun.to_s },
         'righthand' => -> { GameObj.right_hand&.name || 'Empty' },
         'righthandnoun' => -> { GameObj.right_hand&.noun.to_s },
-        # room
-        'roomname' => -> { s = XMLData.room_name.to_s; s.empty? ? XMLData.room_title : s },
+        # room -- bridged to DRRoom (DR) / GameObj (GS), not re-derived from raw XML
+        'roomname' => -> { LichGameState.clean_room_name },
         'roomtitle' => -> { XMLData.room_title }, 'roomdesc' => -> { XMLData.room_description },
-        'roomexits' => -> { XMLData.room_exits_string }, 'gameroomid' => -> { XMLData.room_id },
-        'roomobjs' => -> { Array(GameObj.loot).map(&:name).join('|') },
-        'roomplayers' => -> { Array(GameObj.pcs).map(&:name).join('|') },
+        'roomexits' => -> { Array(XMLData.room_exits).join(', ') }, 'gameroomid' => -> { XMLData.room_id },
+        'roomobjs' => -> { LichGameState.room_objects.join('|') },
+        'roomplayers' => -> { LichGameState.room_players.join('|') },
         'roomnote' => -> { '' }, 'inside' => -> { XMLData.room_inside ? 1 : 0 },
         # creatures
-        'monstercount' => -> { Array(GameObj.npcs).length },
-        'monsterlist' => -> { Array(GameObj.npcs).map(&:name).join('|') },
+        'monstercount' => -> { LichGameState.room_creatures.length },
+        'monsterlist' => -> { LichGameState.room_creatures.join('|') },
         # misc reserved
         'prompt' => -> { XMLData.prompt }, 'zoneid' => -> { 0 }, 'zonename' => -> { 0 },
         'scriptlist' => -> { 'none' }, 'spelltime' => -> { 0 }, 'spellpreptime' => -> { 0 },
@@ -210,6 +210,29 @@ module Lich
       ).merge(
         TIME_SPECIALS.to_h { |token| [token, -> { "@#{token}@" }] }
       ).freeze
+
+      # Room contents bridged to the existing room modules: DragonRealms keeps clean
+      # parsed arrays in DRRoom; GemStone uses GameObj. Never re-derived from raw XML.
+      def self.dr?
+        XMLData.game.to_s.start_with?('DR')
+      end
+
+      def self.room_players
+        dr? ? Array(Lich::DragonRealms::DRRoom.pcs) : Array(GameObj.pcs).map(&:name)
+      end
+
+      def self.room_creatures
+        dr? ? Array(Lich::DragonRealms::DRRoom.npcs) : Array(GameObj.npcs).map(&:name)
+      end
+
+      def self.room_objects
+        dr? ? Array(Lich::DragonRealms::DRRoom.room_objs) : Array(GameObj.loot).map(&:name)
+      end
+
+      # Genie's $roomname is the room title without the surrounding brackets.
+      def self.clean_room_name
+        XMLData.room_title.to_s.sub(/\A\[/, '').sub(/\]\z/, '')
+      end
 
       def key?(name)
         key = name.to_s.downcase
