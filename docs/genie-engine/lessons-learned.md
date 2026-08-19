@@ -100,6 +100,13 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
 - `.gitignore` has a blanket `*.md` — design/spec docs are **force-added** (`git add -f`).
 - **`GenieScript < Script` must set `@thread_group = ThreadGroup.new`** (WizardScript sets it
   at the tail of its init). Missing it → `"bind argument must be an instance of ThreadGroup"`.
+- **The per-character `enabled` toggle key is built from LIVE `XMLData`** (`genie_enabled:<game>:
+  <char>`), which is **empty until the character stream arrives**. Never single-slot-memoize it: an
+  `enabled?` call before login computes key `genie_enabled::`, reads a miss, and would cache a false
+  that poisons the real post-login read (the toggle "won't stick across relogs"). Cache **per
+  resolved key** and **skip caching** when game/char are empty (read live, self-heal). Fixed in
+  `enabled?`/`enabled=` (per-key `@enabled_by_key`, `character_scoped?` guard). Diagnose stored keys:
+  `;eq echo Lich.db.execute("SELECT * FROM lich_settings WHERE name LIKE 'genie_enabled:%';")`.
 - **When `Lich::Genie.enabled` is false, `.cmd` falls back to WizardScript**, which transpiles
   to Ruby and throws syntax errors on Genie syntax (e.g. `matchre "x", (?i)obvious`). If you
   see `Kernel#eval` syntax errors in a `.cmd` run, the engine wasn't enabled.
