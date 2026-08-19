@@ -33,8 +33,9 @@ end
 # End-to-end tests: real Genie scripts compiled and run through the full pipeline
 # (Lexer -> Interpreter -> Substitution/Eval/MathCalc) against fake ports.
 RSpec.describe Lich::Genie::Interpreter do
-  def run_script(source, input_lines: [], game_state: nil, include_loader: nil)
-    clock = [0.0]
+  def run_script(source, input_lines: [], game_state: nil, include_loader: nil, clock: nil)
+    clock_ref = [0.0]
+    clock_proc = clock || -> { clock_ref[0] }
     game = FakeGame.new
     echoes = []
     hooks = []
@@ -47,10 +48,10 @@ RSpec.describe Lich::Genie::Interpreter do
       game_state: game_state,
       include_loader: include_loader,
       game: game,
-      input: FakeInput.new(input_lines, clock),
+      input: FakeInput.new(input_lines, clock_ref),
       echo: ->(text) { echoes << text },
       hooks: hook_sink,
-      clock: -> { clock[0] }
+      clock: clock_proc
     )
     { commands: game.commands, echoes: echoes, hooks: hooks }
   end
@@ -236,6 +237,23 @@ RSpec.describe Lich::Genie::Interpreter do
                                      ['class', { 'name' => 'bgstart', 'enabled' => false }]
                                    ])
       expect(result[:commands]).to be_empty
+    end
+
+    it 'aborts a pure-FE goto loop via the per-run script-timeout deadline' do
+      # A goto loop that only emits hooks never trips the send-history guard; the
+      # wall-clock deadline (Genie iScriptTimeout) must catch it. Clock advances 1s
+      # per call so the 5s deadline trips deterministically without real waiting.
+      ticking = [0.0]
+      source = <<~GENIE
+        spin:
+        put #class churn on
+        goto spin
+      GENIE
+      result = run_script(source, clock: -> { ticking[0] += 1.0 })
+      expect(result[:commands]).to be_empty
+      expect(result[:echoes].last).to match(/Possible infinite loop/)
+      # It emitted some class hooks before the deadline, then stopped (did not hang).
+      expect(result[:hooks].map(&:first).uniq).to eq(['class'])
     end
 
     it 'routes a #command fired from within an async action' do

@@ -24,6 +24,12 @@ module Lich
       LOOP_SAME_CMD_LIMIT = 10
       LOOP_TOTAL_CMD_LIMIT = 30
 
+      # Per-run wall-clock deadline: if a continuous row loop (no wait/send yield)
+      # runs longer than this, abort as a runaway (Genie Config.iScriptTimeout,
+      # default 5000ms; Script.cs:1857). Catches tight goto loops that emit only
+      # hooks/vars, which the send-history guard above never sees.
+      SCRIPT_TIMEOUT_SECONDS = 5.0
+
       # @param program [Lexer::Program]
       # @param variables [Variables]
       # @param name [String] script name (for messages)
@@ -105,6 +111,9 @@ module Lich
       # --- main row loop (RunScript) ----------------------------------------
 
       def run_rows
+        # Reset the runaway deadline for each continuous run (matches Genie resetting
+        # oTimerStart per RunScript call; a wait resumes into a fresh run_rows).
+        @run_deadline = now + SCRIPT_TIMEOUT_SECONDS
         while @state == :running
           index = @call_stack.line_value
           if index >= @program.instructions.length
@@ -113,6 +122,8 @@ module Lich
           end
 
           instruction = @program.instructions[index]
+          break if runaway?(instruction)
+
           on_blockstart if instruction.function == :blockstart
           on_blockend if instruction.function == :blockend
 
@@ -206,6 +217,18 @@ module Lich
 
         @game&.send_command(text)
         local_set('lastcommand', text)
+      end
+
+      # Per-run deadline watchdog (Script.cs:1857): abort a continuous row loop that
+      # exceeds SCRIPT_TIMEOUT_SECONDS with no wait/send yield (e.g. a goto loop that
+      # only emits hooks/vars). Message mirrors Genie's "filename(row)" format.
+      def runaway?(instruction)
+        return false unless now > @run_deadline
+
+        file = @program.files[instruction.file_id] || @name
+        echo_line("[Script timeout in #{file}(#{instruction.file_row}): Possible infinite loop.]")
+        finish
+        true
       end
 
       # Runaway-command watchdog (spec section 8): 10 identical or 30 total in 10s.
