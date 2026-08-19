@@ -229,9 +229,10 @@ module Lich
         dr? ? Array(Lich::DragonRealms::DRRoom.room_objs) : Array(GameObj.loot).map(&:name)
       end
 
-      # Genie's $roomname is the room title without the surrounding brackets.
+      # Genie's $roomname is the room title without surrounding brackets. DR's
+      # room_title is double-bracketed ("[[Name]]"), so strip all leading/trailing.
       def self.clean_room_name
-        XMLData.room_title.to_s.sub(/\A\[/, '').sub(/\]\z/, '')
+        XMLData.room_title.to_s.gsub(/\A\[+/, '').gsub(/\]+\z/, '')
       end
 
       def key?(name)
