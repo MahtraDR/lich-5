@@ -19,7 +19,7 @@ echo     room  = $roomname   exits: $roomexits   north? $north
 echo     hands = L:$lefthand  R:$righthand
 echo     status: standing=$standing kneeling=$kneeling bleeding=$bleeding dead=$dead hidden=$hidden
 echo     creatures = $monstercount ($monsterlist)
-echo     spell timer: Firewall active=$SpellTimer.Firewall.active dur=$SpellTimer.Firewall.duration
+echo     spell timer: Ease Burden active=$SpellTimer.EaseBurden.active dur=$SpellTimer.EaseBurden.duration
 echo     specials: unixtime=$unixtime  time=@time24@
 echo
 echo == STRING METHODS (eval) ==
