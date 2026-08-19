@@ -30,6 +30,11 @@ module Lich
       # hooks/vars, which the send-history guard above never sees.
       SCRIPT_TIMEOUT_SECONDS = 5.0
 
+      # Genie's ScriptChar (Config.m_cScriptChar, default '.'): outgoing text that
+      # starts with it runs another script instead of going to the game -- that's how
+      # `put .helper` launches helper.cmd (Command.cs:2557 / ClassCommand_RunScript).
+      SCRIPT_CHAR = '.'
+
       # @param program [Lexer::Program]
       # @param variables [Variables]
       # @param name [String] script name (for messages)
@@ -38,9 +43,10 @@ module Lich
       # @param echo [#call]
       # @param hooks [#emit]
       # @param clock [#call]
+      # @param launch [#call] callable(name, args_string) to start another script
       # @param specials [Specials]
       def initialize(program:, variables:, name: 'genie', args: [], game: nil, input: nil,
-                     echo: nil, hooks: nil, clock: nil, specials: nil)
+                     echo: nil, hooks: nil, clock: nil, launch: nil, specials: nil)
         @program = program
         @vars = variables
         @name = name
@@ -48,6 +54,7 @@ module Lich
         @input = input
         @echo = echo || ->(_text) {}
         @hooks = hooks
+        @launch = launch || ->(_name, _args) {}
         @clock = clock || -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }
         @timer_start = nil
         @call_stack = CallStack.new
@@ -213,10 +220,23 @@ module Lich
 
       def send_text(text)
         return if text.nil? || text.strip.empty?
+
+        stripped = text.lstrip
+        return launch_script(stripped) if stripped.start_with?(SCRIPT_CHAR)
         return if loop_guard_tripped?(text)
 
         @game&.send_command(text)
         local_set('lastcommand', text)
+      end
+
+      # A `.name args` line launches another script (Genie ScriptChar). Strip the
+      # leading char; first word is the script name, the rest are its args.
+      def launch_script(text)
+        body = text[SCRIPT_CHAR.length..].to_s
+        name = Text.keyword_string(body)
+        return if name.empty?
+
+        @launch.call(name, Text.argument_string(body))
       end
 
       # Per-run deadline watchdog (Script.cs:1857): abort a continuous row loop that

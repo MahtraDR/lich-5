@@ -82,12 +82,22 @@ module Lich
           input: LichInputPort.new(self),
           echo: ->(text) { respond(text) },
           hooks: LichHookSink.new,
+          launch: ->(name, args) { launch_script(name, args) },
           clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }
         )
         interpreter.run
       end
 
       private
+
+      # Launch another script from within a Genie script (`put .name args`). Reuses
+      # Lich's launcher, so `.cmd` targets route back through the Genie engine while
+      # `.lic` targets run as normal Lich scripts. Non-blocking, like Genie.
+      def launch_script(name, args)
+        Lich::Common::Script.start(name, args)
+      rescue StandardError => e
+        respond "--- Lich: genie could not launch script '#{name}': #{e}"
+      end
 
       # Resolve an `include <name>` against the Lich scripts dir (and custom/),
       # trying a `.cmd` extension when none is given. Returns the file's source or nil.

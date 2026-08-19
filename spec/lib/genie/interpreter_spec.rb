@@ -39,6 +39,7 @@ RSpec.describe Lich::Genie::Interpreter do
     game = FakeGame.new
     echoes = []
     hooks = []
+    launches = []
     hook_sink = Object.new.tap do |o|
       o.define_singleton_method(:emit) { |op, payload| hooks << [op, payload] }
     end
@@ -51,9 +52,10 @@ RSpec.describe Lich::Genie::Interpreter do
       input: FakeInput.new(input_lines, clock_ref),
       echo: ->(text) { echoes << text },
       hooks: hook_sink,
+      launch: ->(name, args) { launches << [name, args] },
       clock: clock_proc
     )
-    { commands: game.commands, echoes: echoes, hooks: hooks }
+    { commands: game.commands, echoes: echoes, hooks: hooks, launches: launches }
   end
 
   describe 'control flow, variables, expressions (no waits)' do
@@ -258,6 +260,36 @@ RSpec.describe Lich::Genie::Interpreter do
       expect(result[:echoes].last).to match(/Possible infinite loop/)
       # It emitted some class hooks before the deadline, then stopped (did not hang).
       expect(result[:hooks].map(&:first).uniq).to eq(['class'])
+    end
+
+    it 'launches another script with put .name (Genie ScriptChar), not a game command' do
+      source = <<~GENIE
+        put .helper foo bar
+        exit
+      GENIE
+      result = run_script(source)
+      expect(result[:launches]).to eq([['helper', 'foo bar']])
+      expect(result[:commands]).to be_empty
+    end
+
+    it 'launches a script with send .name and with no args' do
+      source = <<~GENIE
+        send .setup
+        exit
+      GENIE
+      result = run_script(source)
+      expect(result[:launches]).to eq([['setup', '']])
+      expect(result[:commands]).to be_empty
+    end
+
+    it 'still sends ordinary commands to the game' do
+      source = <<~GENIE
+        put attack kobold
+        exit
+      GENIE
+      result = run_script(source)
+      expect(result[:commands]).to eq(['attack kobold'])
+      expect(result[:launches]).to be_empty
     end
 
     it 'routes a #command fired from within an async action' do
