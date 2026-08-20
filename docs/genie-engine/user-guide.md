@@ -697,6 +697,7 @@ echo Mana: $mana / $maxmana
 | `$roomname` | The room's title (brackets removed) |
 | `$roomdesc` | The room description |
 | `$roomexits` | Obvious exits, comma-separated |
+| `$roomid` | Current room's Genie room number (`0` if the room isn't mapped yet) |
 | `$north`, `$south`, `$east`, `$west`, `$northeast`, `$northwest`, `$southeast`, `$southwest`, `$up`, `$down`, `$out` | `1` if that exit exists, else `0` |
 | `$roomplayers` | Other players present (separated by `|`) |
 | `$monstercount` | Number of creatures present |
@@ -707,6 +708,16 @@ echo Mana: $mana / $maxmana
 if $north = 1 then put go north
 echo There are $monstercount creatures here.
 ```
+
+**Moving by room number.** `put #goto <room>` walks you to a Genie room number using Lich's own
+pathfinder (go2), and `$roomid` tells you the room you're in — so the classic Genie pattern works:
+
+```
+if $roomid != 8 then put #goto 8
+```
+
+Genie room numbers are matched to Lich's map behind the scenes. A room that hasn't been matched yet
+reports `$roomid = 0` ("location unknown"), just like Genie's mapper when it's lost.
 
 ### Your hands
 

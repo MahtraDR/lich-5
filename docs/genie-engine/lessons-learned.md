@@ -114,7 +114,28 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
 - **`.name` launches a script from put/send/do AND `#send`** (tester-confirmed: `#send .uncon` runs
   uncon.cmd; `put .loadcombattriggers` runs loadcombattriggers.cmd). Handled in `send_text`.
 
-## Movement / room navigation (OPEN — needs a decision)
+## Movement / room navigation (IMPLEMENTED via mapdb genie stamps)
+- **Genie map data is stamped INTO the shared Lich mapdb** (not a side table): each Room carries
+  `genie_zone`/`genie_id`/`genie_pos` (strings; `genie_pos` = `"x,y,z"`), resolved by
+  `Map.by_genie_ref(zone, node)`. The fields + resolver already existed in map_dr.rb (the map authors
+  anticipated this). Stamped once (Saga-style title+desc match, ~78% coverage, 84 zones), yearly
+  top-up; `(genie_zone, genie_id)` verified 100% unique so `by_genie_ref` is unambiguous.
+- **`$roomid` is ZONE-LOCAL** (Genie loads one zone map at a time; `#goto` is single-zone, cross-zone
+  is an unimplemented Genie stub). So identity = `(zone, node)` — exactly why `by_genie_ref` takes two
+  args. Resolver: `$roomid` -> `Map.current&.genie_id || "0"` (`"0"` == Genie "mapper lost", which
+  `if $roomid = 0` guards). `#goto <n>` -> `Map.by_genie_ref(Map.current.genie_zone, n)` -> `DRCT.walk_to`
+  (go2). Path-A fallback when unstamped/no-map: treat `n` as a Lich room id or game uid.
+- **ARRIVED/FAILED shim:** go2/DRCT don't emit Genie's automapper result lines, but the `automove`
+  idiom does `put #goto`; `matchwait YOU HAVE ARRIVED|FAILED`. So after the walk, push
+  `"YOU HAVE ARRIVED"`/`"YOU HAVE FAILED"` into the script's `@downstream_buffer`
+  (`LimitedArray#push` signals `gets`/`wait_shift`) so the matchwait resolves. Triggers that `#goto`
+  walk but skip the inject (they don't matchwait). `mover` is a CommandRouter port so `#goto` works
+  from scripts, triggers, and `#if` branches.
+- `Room < Map` (subclass, inherits class methods); `@@list` is an id-indexed array (`Map.list[id]`);
+  `DRCT.walk_to(id, restart_on_fail=false)` returns true/false — pass `false` so a failed walk doesn't
+  restart the GenieScript.
+
+## Movement / room navigation (historical notes)
 - Room-nav scripts (Mastercraft especially) use **`$roomid`** (Genie's automapper current-room
   number, 81x) compared to configured target rooms (`$MC_PREFERRED.ROOM`, `$part.room`, ...), then
   call an in-script `automove:` sub that does **`put #goto <roomnum>`** + `put #mapper reset` and
