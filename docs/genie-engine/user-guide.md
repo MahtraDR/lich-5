@@ -580,14 +580,6 @@ put #gag a small bird flies past
 
 From now on, lines containing "a small bird flies past" won't be shown to you.
 
-**Gag** — hide any line matching a pattern:
-
-```
-put #gag a small bird flies past
-```
-
-From now on, lines containing "a small bird flies past" won't be shown to you.
-
 **Substitute** — rewrite matching text:
 
 ```
@@ -919,8 +911,10 @@ Yes, just like other Lich scripts. They share your saved global variables.
 
 **Is anything not supported yet?**
 A few advanced Genie features are still in progress — notably in-script JavaScript blocks
-(`<% ... %>` / `#js`) and plugins. Ordinary automation, variables, math, triggers, gags, and
-substitutions all work today. Front-end visual effects work as your front-end adds support for them.
+(`<% ... %>` / `#js`) and plugins. Ordinary automation, variables, math, triggers, gags,
+substitutions, launching other scripts (`.name`), and room navigation (`#goto` / `$roomid`, where
+the map has been matched) all work today. Front-end visual effects work as your front-end adds
+support for them.
 
 ---
 
