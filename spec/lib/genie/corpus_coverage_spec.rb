@@ -14,10 +14,13 @@ RSpec.describe 'Genie real-world corpus (local, skipped if absent)' do
   repo = ENV['GENIE_CORPUS_ROOT'] || File.expand_path('~/repos')
   downloads = ENV['GENIE_DOWNLOADS'] || File.expand_path('~/Downloads')
 
+  tirost = File.join(downloads, 'genie-scripts', 'Tirost')
+
   search_dirs = [
     File.join(repo, 'DR-Genie-Scripts'),
     File.join(repo, 'DR-Genie-Scripts', 'GenieHunter'),
     File.join(repo, 'Mastercraft'),
+    tirost,
     downloads
   ]
 
@@ -40,7 +43,9 @@ RSpec.describe 'Genie real-world corpus (local, skipped if absent)' do
     'GenieHunter (hunt.cmd)'        => File.join(repo, 'DR-Genie-Scripts', 'GenieHunter', 'hunt.cmd'),
     'GenieHunter (gh_setup.cmd)'    => File.join(repo, 'DR-Genie-Scripts', 'GenieHunter', 'gh_setup.cmd'),
     'ubercombat (uber.cmd)'         => File.join(downloads, 'uber.cmd'),
-    'ubercombat (uberwatch.cmd)'    => File.join(downloads, 'uberwatch.cmd')
+    'ubercombat (uberwatch.cmd)'    => File.join(downloads, 'uberwatch.cmd'),
+    'Tirost (sc.cmd + includes)'    => File.join(tirost, 'sc.cmd'),
+    'Tirost (spellbook.cmd)'        => File.join(tirost, 'spellbook.cmd')
   }.each do |label, path|
     it "compiles #{label} with zero unknown-command warnings" do
       skip "not present locally: #{path}" unless File.exist?(path)

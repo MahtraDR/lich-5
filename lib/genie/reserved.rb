@@ -9,8 +9,10 @@ module Lich
     #   * $SpellTimer.<Spell>.active / .duration  (dotted object vars)
     #   * indicator flags ($bleeding, $dead, $standing, ...) via Lich check* predicates
     #
-    # Spell-name matching is space-insensitive: Genie uses CamelCase ("BlufmorGaraen")
-    # while the game/Lich uses spaced names ("Blufmor Garaen").
+    # Spell-name matching mirrors the Genie SpellTimer plugin's spellNameToVariableName
+    # (strips spaces, apostrophes, and hyphens): Genie scripts use the collapsed form
+    # ("BlufmorGaraen", "GlythtidesGift") while the game/Lich uses the display name
+    # ("Blufmor Garaen", "Glythtide's Gift").
     module Reserved
       SPELL_TIMER = /\ASpellTimer\.(?<spell>.+)\.(?<field>active|duration)\z/i
 
@@ -64,8 +66,10 @@ module Lich
         INDICATOR_CHECKS[name.to_s.downcase]
       end
 
+      # Collapse a spell name for matching: strip spaces, apostrophes, and hyphens
+      # (matches the SpellTimer plugin's spellNameToVariableName).
       def despace(text)
-        text.to_s.downcase.delete(' ')
+        text.to_s.downcase.gsub(/[\s'-]/, '')
       end
     end
   end

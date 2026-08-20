@@ -13,12 +13,17 @@ RSpec.describe Lich::Genie::Reserved do
   end
 
   describe '.spell_timer' do
-    # Genie uses spaceless CamelCase; the game/Lich uses spaced names.
-    let(:active) { { 'Blufmor Garaen' => 42, 'Dragons Breath' => 5 } }
+    # Genie uses the collapsed form; the game/Lich uses the display name.
+    let(:active) { { 'Blufmor Garaen' => 42, 'Dragons Breath' => 5, "Glythtide's Gift" => 8 } }
 
     it 'matches space-insensitively and reports active as 1/0' do
       expect(described_class.spell_timer(active, 'SpellTimer.BlufmorGaraen.active')).to eq(1)
       expect(described_class.spell_timer(active, 'SpellTimer.Vertigo.active')).to eq(0)
+    end
+
+    it "strips apostrophes and hyphens like SpellTimer (\"Glythtide's Gift\" -> GlythtidesGift)" do
+      expect(described_class.spell_timer(active, 'SpellTimer.GlythtidesGift.active')).to eq(1)
+      expect(described_class.spell_timer(active, 'SpellTimer.GlythtidesGift.duration')).to eq(8)
     end
 
     it 'returns the duration for an active spell, 0 when inactive' do
