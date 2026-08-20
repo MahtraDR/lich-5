@@ -165,6 +165,19 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   1000 is immaterial. `.charge` unused by Tirost (defer). The SpellTimer plugin ~= our
   dr_active_spells bridge; no plugin port needed.
 - **Tirost's full suite (sc.cmd + 16 includes + spellbook, 14,696 instrs) parses 100% clean.**
+- **`send`/`do` must route `#commands` and `.scripts` too, not just `put`.** Genie runs put/send/do
+  all through ParseCommand. We only routed `put #`; `send #class ... on` went to the game as text.
+  Fix: centralize `#`-routing + `.`-launch in `send_text` (the shared sink for put/send/do + action
+  bodies).
+- **RT-gate game sends (`waitrt?` before `put` in LichGamePort).** Genie paces on roundtime. Without
+  it, a script's deliberate `...wait`-retry loop (Tirost's `matchre ...wait` failsafe) re-sends every
+  ~1s during RT and trips the infinite-loop guard. `waitrt?` (no-op when no RT) makes sends wait out
+  RT first, so the retry rarely fires. This is the "RT pacing" item -- solved Genie-internally, NOT
+  via a broker (there is none in this lich; design Decision 5 was aspirational).
+- **Triggers/gags must match the DISPLAYED text, not the raw stream.** `DownstreamHook.run`
+  (games.rb:1082) gets the XML-laden `server_string`, so `^`-anchored trigger patterns on tag-wrapped
+  lines never matched (looked like triggers/`#class` were dead). Strip tags (`gsub(/<[^>]+>/,'')`)
+  before trigger matching; gag/sub still rewrite the real line.
 
 ## DR game-state (the big surprises)
 - **`XMLData` is shared GS/DR.** DR-specific state lives in DR modules.
