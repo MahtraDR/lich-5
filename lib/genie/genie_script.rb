@@ -105,9 +105,14 @@ module Lich
           Lich::Common::DownstreamHook.add('genie-downstream', lambda { |server_string|
             begin
               # Triggers match the DISPLAYED text (Genie strips XML before matching),
-              # so drop tags for the match; gag/sub still operate on the real line.
-              line = server_string.gsub(/<[^>]+>/, '')
-              Lich::Genie.triggers.apply(line) { |commands, captures| runner.fire(commands, captures) }
+              # so drop tags + surrounding whitespace for the match; gag/sub still
+              # operate on the real line.
+              line = server_string.gsub(/<[^>]+>/, '').strip
+              respond "--- genie rx: #{line[0, 100].inspect}" if Lich::Genie.trace_triggers && !line.empty?
+              Lich::Genie.triggers.apply(line) do |commands, captures|
+                respond "--- genie trigger FIRED: #{commands[0, 60]}" if Lich::Genie.trace_triggers
+                runner.fire(commands, captures)
+              end
             rescue StandardError => e
               respond "--- Lich: genie trigger error: #{e}"
             end

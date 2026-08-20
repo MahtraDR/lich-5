@@ -106,6 +106,11 @@ module Lich
         @triggers ||= Triggers.new
       end
 
+      # Diagnostic: when true, the downstream hook echoes each (XML-stripped) line it
+      # checks and each trigger that fires -- so a tester can see whether the stream is
+      # reaching the trigger matcher live. Toggle with `;e Lich::Genie.trace_triggers = true`.
+      attr_accessor :trace_triggers
+
       private
 
       def truthy?(value)
