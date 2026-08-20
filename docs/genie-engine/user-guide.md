@@ -750,6 +750,22 @@ if $SpellTimer.MyBuff.active = 0 then put cast mybuff
 echo MyBuff has $SpellTimer.MyBuff.duration left.
 ```
 
+### Skills & experience (the EXPTracker equivalent)
+
+Per-skill training data, sourced from Lich (no plugin needed). Use the skill name with spaces
+written as underscores (e.g. `Small_Edged`, `Targeted_Magic`):
+
+| Variable | Meaning |
+|---|---|
+| `$<Skill>.LearningRate` | Mindstate / learning rate (0–34; 34 = mind-locked) |
+| `$<Skill>.Ranks` (or `.Rank`) | Skill ranks |
+| `$<Skill>.Percent` | Percent toward the next rank |
+
+```
+if $Perception.LearningRate < 30 then put forage for herbs
+if $Scouting.Ranks > 15 then put scout aware
+```
+
 ### Time
 
 `$unixtime` (seconds since 1970) is handy for "do this again in N seconds" timers:
