@@ -95,9 +95,22 @@ module Lich
         @mtime = current
       end
 
+      # Persist is BEST-EFFORT: a failed disk write (e.g. Windows file lock) must
+      # never raise into the script/trigger that set the variable -- the in-memory
+      # value is already stored, which is what script logic reads. Skip redundant
+      # writes (unchanged content) to cut churn. Failures are logged once, quietly.
       def save_file
+        content = VariableFile.dump(@values.select { |key, _| @persistent[key] })
+        return if content == @last_saved
+
         VariableFile.save(@file, @values.select { |key, _| @persistent[key] })
+        @last_saved = content
         @mtime = File.mtime(@file) if File.exist?(@file)
+      rescue StandardError => e
+        return if @warned_persist
+
+        @warned_persist = true
+        Lich.log("Genie: variables.cfg persist failed (values kept in memory): #{e}") if defined?(Lich) && Lich.respond_to?(:log)
       end
     end
   end

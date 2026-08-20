@@ -33,7 +33,12 @@ module Lich
         "#{entries.map { |key, value| "#var {#{key}} {#{value}}" }.join("\n")}\n"
       end
 
-      # Atomically write +entries+ to +path+ (temp file + rename).
+      # Atomically write +entries+ to +path+ (temp file + rename), tolerating
+      # Windows' transient rename locks. `variables.cfg` is rewritten on every
+      # `#var`, so under combat churn (and concurrent scripts) the rename can hit
+      # "Permission denied" when an AV/indexer/other handle briefly holds the file.
+      # Retry a few times, then fall back to a direct overwrite; the temp file is
+      # always cleaned up. Callers treat persistence as best-effort.
       # @param path [String]
       # @param entries [Hash{String=>String}]
       # @return [void]
@@ -41,7 +46,25 @@ module Lich
         FileUtils.mkdir_p(File.dirname(path))
         tmp = "#{path}.tmp.#{Process.pid}"
         File.write(tmp, dump(entries))
-        File.rename(tmp, path)
+        atomic_replace(tmp, path)
+      ensure
+        File.delete(tmp) if tmp && File.exist?(tmp)
+      end
+
+      # @return [void]
+      def atomic_replace(tmp, path)
+        attempts = 0
+        begin
+          File.rename(tmp, path)
+        rescue SystemCallError
+          attempts += 1
+          if attempts < 10
+            sleep 0.05
+            retry
+          end
+          # Rename can't replace a locked target on Windows; try a direct write.
+          File.binwrite(path, File.binread(tmp))
+        end
       end
     end
   end

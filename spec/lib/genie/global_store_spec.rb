@@ -41,6 +41,22 @@ RSpec.describe Lich::Genie::GlobalStore do
       expect(described_class.new(file: path).key?('gone')).to be(false)
     end
 
+    it 'keeps the value in memory and does NOT raise when persistence fails' do
+      # A locked variables.cfg (Windows "Permission denied" on rename) must not abort
+      # the script/trigger that set the var -- regression for Tirost's harn crash.
+      store = described_class.new(file: path)
+      allow(Lich::Genie::VariableFile).to receive(:save).and_raise(Errno::EACCES.new('locked'))
+      expect { store.set('harn', '34', persist: true) }.not_to raise_error
+      expect(store.get('harn')).to eq('34') # still usable this session
+    end
+
+    it 'skips redundant disk writes when the persisted content is unchanged' do
+      store = described_class.new(file: path)
+      store.set('x', '1', persist: true)
+      expect(Lich::Genie::VariableFile).not_to receive(:save)
+      store.set('x', '1', persist: true) # same value -> no rewrite
+    end
+
     it 'picks up external changes when the file mtime advances' do
       store = described_class.new(file: path)
       store.set('shared', 'first', persist: true)
