@@ -213,15 +213,17 @@ module Lich
       # --- IO verbs ---------------------------------------------------------
 
       def do_put(arg)
-        return if arg.strip.empty?
-
-        arg.start_with?('#') ? @router.route(arg) : send_text(arg)
+        send_text(arg)
       end
 
+      # The single sink for put/send/do (and action bodies). Genie routes ALL of
+      # these through ParseCommand, so a leading '#' is a bar command and a leading
+      # '.' launches a script -- for put AND send AND do (not just put).
       def send_text(text)
         return if text.nil? || text.strip.empty?
 
         stripped = text.lstrip
+        return @router.route(stripped) if stripped.start_with?('#')
         return launch_script(stripped) if stripped.start_with?(SCRIPT_CHAR)
         return if loop_guard_tripped?(text)
 

@@ -307,6 +307,27 @@ RSpec.describe Lich::Genie::Interpreter do
       expect(result[:launches]).to be_empty
     end
 
+    it 'routes #commands issued via send and do (not only put), like Genie ParseCommand' do
+      # send #class / do #var must route through the command router, NOT go to the
+      # game as literal text. Tester's #class toggles rely on this.
+      source = <<~GENIE
+        send #class combat on
+        do #var mode hunt
+        echo mode is $mode
+        exit
+      GENIE
+      result = run_script(source)
+      expect(result[:hooks]).to eq([['class', { 'name' => 'combat', 'enabled' => true }]])
+      expect(result[:echoes]).to eq(['mode is hunt'])
+      expect(result[:commands]).to be_empty # nothing leaked to the game
+    end
+
+    it 'launches a script via send .name and do .name' do
+      result = run_script("send .helper\ndo .other\nexit")
+      expect(result[:launches]).to eq([['helper', ''], ['other', '']])
+      expect(result[:commands]).to be_empty
+    end
+
     it 'routes #goto <room> to the mover, not the game' do
       source = <<~GENIE
         put #goto 93

@@ -104,7 +104,10 @@ module Lich
           runner = trigger_runner
           Lich::Common::DownstreamHook.add('genie-downstream', lambda { |server_string|
             begin
-              Lich::Genie.triggers.apply(server_string) { |commands, captures| runner.fire(commands, captures) }
+              # Triggers match the DISPLAYED text (Genie strips XML before matching),
+              # so drop tags for the match; gag/sub still operate on the real line.
+              line = server_string.gsub(/<[^>]+>/, '')
+              Lich::Genie.triggers.apply(line) { |commands, captures| runner.fire(commands, captures) }
             rescue StandardError => e
               respond "--- Lich: genie trigger error: #{e}"
             end
@@ -212,7 +215,11 @@ module Lich
     # Sends a Genie command to the game via Lich's `put` (echo + prefix + send).
     # Pacing/broker mediation will be layered here per design Decision 5.
     class LichGamePort
+      # Wait out any active roundtime before sending (Genie paces on RT, so scripts
+      # don't spam a command during RT and hit the "...wait N seconds" retry loop).
+      # waitrt? returns immediately when there's no RT.
       def send_command(text)
+        waitrt?
         put(text)
       end
     end
