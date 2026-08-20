@@ -147,6 +147,14 @@ module Lich
               current = :separator
               cp += 1
             end
+          elsif current == :number
+            # A non-numeric char inside a would-be number (e.g. ".sc", "3x") means the
+            # whole run is a bareword, not a number -- reclassify WITHOUT flushing so the
+            # leading digits/'.'/'-' stay part of the token (mirrors Genie's bIgnoreNumber).
+            # The `current != :function` guard on the number branch above then stops any
+            # later digit from restarting a number mid-token.
+            current = :function
+            cp += 1
           else
             unless current == :function
               flush.call(cp)

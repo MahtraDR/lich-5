@@ -284,6 +284,19 @@ RSpec.describe Lich::Genie::Interpreter do
       expect(result[:commands]).to be_empty
     end
 
+    it "launches a script held in a variable (Tirost's `put \$magicloop` = `.sc`)" do
+      # $magicloop = ".sc"; a guarded `put $magicloop` must (a) evaluate the guard
+      # true and (b) launch the .sc script, not send ".sc" to the game.
+      source = <<~GENIE
+        $magicloop = .sc
+        if $magicloop != 0 then put $magicloop
+        exit
+      GENIE
+      result = run_script(source)
+      expect(result[:launches]).to eq([['sc', '']])
+      expect(result[:commands]).to be_empty
+    end
+
     it 'still sends ordinary commands to the game' do
       source = <<~GENIE
         put attack kobold

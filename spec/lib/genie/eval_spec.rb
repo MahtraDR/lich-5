@@ -45,6 +45,21 @@ RSpec.describe Lich::Genie::Eval do
       expect(truthy('05 = 5')).to be(true) # both numeric tokens -> numeric comparison
       expect(truthy('"5" = "5"')).to be(true)
     end
+
+    # An unquoted value with a leading '.' (e.g. a script name like ".sc") must be a
+    # STRING token, not a malformed number -- Tirost's `if $magicloop != 0` where
+    # $magicloop = ".sc" relies on this being true. Regression for the .sc split bug.
+    it 'treats a leading-dot bareword (".sc") as a string, not a number' do
+      expect(truthy('.sc != 0')).to be(true)
+      expect(truthy('.sc = 0')).to be(false)
+      expect(truthy('.sc = .sc')).to be(true)
+      expect(truthy('3x != 0')).to be(true) # digits+letters -> string too
+    end
+
+    it 'still parses genuine numbers with leading dot / minus' do
+      expect(truthy('.5 > 0')).to be(true)
+      expect(truthy('-3 < 0')).to be(true)
+    end
   end
 
   describe 'keyword aliases' do
