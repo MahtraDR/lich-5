@@ -178,6 +178,21 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   (games.rb:1082) gets the XML-laden `server_string`, so `^`-anchored trigger patterns on tag-wrapped
   lines never matched (looked like triggers/`#class` were dead). Strip tags (`gsub(/<[^>]+>/,'')`)
   before trigger matching; gag/sub still rewrite the real line.
+- **`#var` persistence MUST be best-effort -- a disk-write failure cannot abort the script/trigger.**
+  The decisive "triggers/`#class` don't fire" report (round 3) was NOT a trigger bug at all: the
+  triggers fired, but their `#var harn` action wrote `variables.cfg` via temp-file + `File.rename`,
+  which on Windows raised `Permission denied @ rb_file_s_rename` (the file is rewritten on EVERY
+  combat `#var`, and an AV/indexer/concurrent script briefly locks it). The raised exception
+  unwound the trigger action mid-way, so `harn` never updated and the follow-up `#class harness off`
+  never ran -> harn-spam + dead-looking triggers. The tester's log (`genie trigger error:
+  Permission denied @ rb_file_s_rename ... variables.cfg.tmp.<pid>`) was the smoking gun; the
+  headless `apply` "no FIRE" was a red herring (that trigger was legitimately class-off). Two-part
+  fix: (1) `VariableFile.atomic_replace` retries the rename (10x/50ms) then falls back to a direct
+  overwrite, always cleaning up the temp file; (2) `GlobalStore#save_file` rescues ALL persist
+  errors (never raises into script/trigger -- the in-memory value is already set, which is what
+  script logic reads), logs once, and skips redundant writes (unchanged content) to cut churn.
+  General principle: reserved/config persistence is a side effect; script control flow must not
+  depend on it succeeding.
 
 ## DR game-state (the big surprises)
 - **`XMLData` is shared GS/DR.** DR-specific state lives in DR modules.
