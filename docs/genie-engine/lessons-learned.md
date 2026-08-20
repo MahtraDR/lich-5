@@ -149,6 +149,23 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   go2/DRC.walk_to don't emit — a `#goto` bridge also needs a compat shim that emits
   `YOU HAVE ARRIVED`/`YOU HAVE FAILED` (or the scripts need minor edits). Movement is Phase-6.
 
+## Tester-found bugs (Tirost, sc.cmd author)
+- **A leading-dot bareword (`.sc`) must tokenize as a STRING in `Eval`, not a number.** Tirost stashes
+  a script name in a var (`$magicloop = .sc`) then `if $magicloop != 0 then put $magicloop` to launch
+  it. The Eval tokenizer started a NUMBER token on `.`, split `.sc` -> number(".")+string("sc"), so
+  `.sc != 0` mis-reduced to FALSE and the launch never fired. Fix: when a would-be number hits a
+  non-numeric char, reclassify the whole run as a bareword WITHOUT flushing (mirrors Genie's
+  `bIgnoreNumber`); `.5`/`-3` still parse as numbers. So the visible symptom was "put $var doesn't
+  launch," but the real bug was the GUARD (`!= 0`) evaluating wrong.
+- **SpellTimer name normalization strips spaces, apostrophes, AND hyphens** (plugin's
+  `spellNameToVariableName`), so `$SpellTimer.GlythtidesGift` matches game "Glythtide's Gift". Our
+  `despace` only stripped spaces -> broadened to `gsub(/[\s'-]/,'')`. Plugin also exposes `.charge`
+  (charge count) in addition to `.active`/`.duration`, all in roisaen; Tirost uses only
+  active/duration with threshold compares, so the plugin's Indefinite=999 vs our dr_active_spells
+  1000 is immaterial. `.charge` unused by Tirost (defer). The SpellTimer plugin ~= our
+  dr_active_spells bridge; no plugin port needed.
+- **Tirost's full suite (sc.cmd + 16 includes + spellbook, 14,696 instrs) parses 100% clean.**
+
 ## DR game-state (the big surprises)
 - **`XMLData` is shared GS/DR.** DR-specific state lives in DR modules.
 - **DR `room_title` is DOUBLE-bracketed**: `"[[Bosque Deriel, Burial Ground]]"`
