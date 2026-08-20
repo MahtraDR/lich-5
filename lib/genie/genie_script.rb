@@ -388,7 +388,8 @@ module Lich
 
       def key?(name)
         key = name.to_s.downcase
-        RESOLVERS.key?(key) || !Reserved.indicator_check(key).nil? || Reserved.spell_timer?(name)
+        RESOLVERS.key?(key) || !Reserved.indicator_check(key).nil? ||
+          Reserved.spell_timer?(name) || (skills_available? && Reserved.skill_var?(name))
       end
 
       def [](name)
@@ -400,12 +401,20 @@ module Lich
           send(check) ? '1' : '0'
         elsif Reserved.spell_timer?(name)
           Reserved.spell_timer(active_spells, name).to_s
+        elsif skills_available? && Reserved.skill_var?(name)
+          # $<Skill>.LearningRate/.Ranks/.Percent -> DRSkill (Genie EXPTracker plugin)
+          Reserved.skill_var(name, skills: Lich::DragonRealms::DRSkill).to_s
         end
       rescue StandardError
         nil
       end
 
       private
+
+      # DRSkill (the EXPTracker equivalent) exists only in DragonRealms.
+      def skills_available?
+        XMLData.game.to_s.start_with?('DR') && defined?(Lich::DragonRealms::DRSkill)
+      end
 
       # Active-spell map for SpellTimer resolution: DR uses dr_active_spells directly
       # (name => duration); GemStone derives an equivalent from Effects::Spells.

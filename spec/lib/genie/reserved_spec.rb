@@ -12,6 +12,41 @@ RSpec.describe Lich::Genie::Reserved do
     end
   end
 
+  describe '.skill_var (EXPTracker bridge)' do
+    # Fake DRSkill: getxp = mindstate/learning rate, getrank = ranks, getpercent = %.
+    let(:skills) do
+      Object.new.tap do |o|
+        o.define_singleton_method(:getxp) { |s| { 'Small Edged' => 12, 'Perception' => 34 }[s] || 0 }
+        o.define_singleton_method(:getrank) { |s| { 'Scouting' => 150 }[s] || 0 }
+        o.define_singleton_method(:getpercent) { |s| { 'Athletics' => 88 }[s] || 0 }
+      end
+    end
+
+    it 'recognizes $<Skill>.LearningRate/.Ranks/.Percent references' do
+      expect(described_class.skill_var?('Athletics.LearningRate')).to be(true)
+      expect(described_class.skill_var?('Scouting.Ranks')).to be(true)
+      expect(described_class.skill_var?('Small_Edged.Percent')).to be(true)
+      expect(described_class.skill_var?('health')).to be(false)
+      expect(described_class.skill_var?('SpellTimer.Foo.active')).to be(false)
+    end
+
+    it 'maps LearningRate to mindstate and underscores to spaces' do
+      expect(described_class.skill_var('Small_Edged.LearningRate', skills: skills)).to eq(12)
+      expect(described_class.skill_var('Perception.LearningRate', skills: skills)).to eq(34)
+    end
+
+    it 'maps Ranks/Rank to rank and Percent to percent' do
+      expect(described_class.skill_var('Scouting.Ranks', skills: skills)).to eq(150)
+      expect(described_class.skill_var('Scouting.Rank', skills: skills)).to eq(150)
+      expect(described_class.skill_var('Athletics.Percent', skills: skills)).to eq(88)
+    end
+
+    it 'returns 0 for an unknown skill and nil for a non-skill name' do
+      expect(described_class.skill_var('Nonexistent.LearningRate', skills: skills)).to eq(0)
+      expect(described_class.skill_var('health', skills: skills)).to be_nil
+    end
+  end
+
   describe '.spell_timer' do
     # Genie uses the collapsed form; the game/Lich uses the display name.
     let(:active) { { 'Blufmor Garaen' => 42, 'Dragons Breath' => 5, "Glythtide's Gift" => 8 } }

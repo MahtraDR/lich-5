@@ -16,6 +16,11 @@ module Lich
     module Reserved
       SPELL_TIMER = /\ASpellTimer\.(?<spell>.+)\.(?<field>active|duration)\z/i
 
+      # `$<Skill>.LearningRate` / `.Ranks` / `.Rank` / `.Percent` -- the Genie
+      # EXPTracker plugin's per-skill variables. Genie uses underscores for spaces
+      # ("Small_Edged"); we map them to the game's spaced names for the skill lookup.
+      SKILL_VAR = /\A(?<skill>[A-Za-z][A-Za-z_]*)\.(?<field>learningrate|ranks?|percent)\z/i
+
       # Genie flag name => Lich global status predicate. These work for both DR and
       # GS (unlike XMLData.indicator, which DR does not populate).
       INDICATOR_CHECKS = {
@@ -57,6 +62,31 @@ module Lich
         case match[:field].downcase
         when 'active' then entry ? 1 : 0
         when 'duration' then entry ? entry[1] : 0
+        end
+      end
+
+      # @param name [String]
+      # @return [Boolean] whether +name+ is a $<Skill>.<field> (EXPTracker) reference
+      def skill_var?(name)
+        name.to_s.match?(SKILL_VAR)
+      end
+
+      # Resolve a $<Skill>.LearningRate/.Ranks/.Percent reference (Genie EXPTracker)
+      # against a skills provider (e.g. DR's DRSkill: getxp = mindstate/learning rate,
+      # getrank = ranks, getpercent = % to next rank). Genie underscores map to spaces.
+      #
+      # @param name [String] e.g. "Small_Edged.LearningRate"
+      # @param skills [#getxp, #getrank, #getpercent]
+      # @return [Integer, nil] the value, or nil if +name+ isn't a skill reference
+      def skill_var(name, skills:)
+        match = name.to_s.match(SKILL_VAR)
+        return nil unless match
+
+        skill = match[:skill].tr('_', ' ')
+        case match[:field].downcase
+        when 'learningrate' then skills.getxp(skill)
+        when 'rank', 'ranks' then skills.getrank(skill)
+        when 'percent' then skills.getpercent(skill)
         end
       end
 
