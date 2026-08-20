@@ -30,12 +30,14 @@ module Lich
       # @param echo [#call] local echo sink
       # @param send [#call] game-command sink (applies pacing / loop guard)
       # @param hooks [#emit, nil] front-end effect sink
-      def initialize(vars:, eval:, echo:, send:, hooks:)
+      # @param mover [#call, nil] callable(room_arg) that walks to a room (#goto)
+      def initialize(vars:, eval:, echo:, send:, hooks:, mover: nil)
         @vars = vars
         @eval = eval
         @echo = echo
         @send = send
         @hooks = hooks
+        @mover = mover || ->(_room) {}
       end
 
       # Route a top-level `#command` (leading '#'); a non-empty result is sent to the
@@ -85,8 +87,18 @@ module Lich
         when 'math' then do_math(args)
         when 'if' then do_if(args)
         when 'send' then send_to_game(argument)
+        when 'goto' then goto_room(argument)
+        when 'mapper', 'automapper' then '' # reset/etc: no-op (we route movement via go2/DRC)
         else dispatch_fe(keyword, args, argument)
         end
+      end
+
+      # #goto <room>: walk there (Genie automapper). Room-number translation +
+      # the actual walk are the injected mover's job (Lich-side); see the glue.
+      def goto_room(argument)
+        room = argument.to_s.strip
+        @mover.call(room) unless room.empty?
+        ''
       end
 
       # Front-end effects: emit a self-describing normalized event. Payloads are

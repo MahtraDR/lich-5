@@ -46,7 +46,7 @@ module Lich
       # @param launch [#call] callable(name, args_string) to start another script
       # @param specials [Specials]
       def initialize(program:, variables:, name: 'genie', args: [], game: nil, input: nil,
-                     echo: nil, hooks: nil, clock: nil, launch: nil, specials: nil)
+                     echo: nil, hooks: nil, clock: nil, launch: nil, mover: nil, specials: nil)
         @program = program
         @vars = variables
         @name = name
@@ -63,7 +63,7 @@ module Lich
         @substitution = Substitution.new(variables: @vars, specials: resolved_specials)
         @eval = Eval.new(globals: GlobalsAdapter.new(@vars))
         @router = CommandRouter.new(
-          vars: @vars, eval: @eval, hooks: @hooks,
+          vars: @vars, eval: @eval, hooks: @hooks, mover: mover,
           echo: ->(text) { echo_line(text) },
           send: ->(text) { send_text(text) }
         )

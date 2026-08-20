@@ -84,6 +84,7 @@ module Lich
           echo: ->(text) { respond(text) },
           hooks: LichHookSink.new,
           launch: ->(name, args) { launch_script(name, args) },
+          mover: ->(room) { genie_goto(room) },
           clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }
         )
         interpreter.run
@@ -123,9 +124,41 @@ module Lich
               vars: vars, eval: Eval.new(globals: globals),
               game: LichGamePort.new,
               launch: ->(name, args) { Lich::Common::Script.start(name, args) },
-              hooks: LichHookSink.new, echo: ->(text) { respond(text) }
+              hooks: LichHookSink.new, echo: ->(text) { respond(text) },
+              mover: ->(room) { genie_walk(room) } # triggers walk but don't matchwait, so no ARRIVED inject
             )
           end
+        end
+
+        # Walk to a Genie room. Genie `#goto`/$roomid use the CURRENT zone's local
+        # node id, stamped on Lich rooms as genie_zone/genie_id (Map.by_genie_ref).
+        # Path A fallback (unstamped or no map): treat the number as a Lich room id
+        # or game uid. Delegates the walk to DRCT.walk_to (go2 under the hood).
+        # @return [Symbol] :arrived, :failed, or :unknown
+        def genie_walk(room)
+          target = resolve_genie_room(room.to_s.strip)
+          return :unknown if target.nil?
+
+          Lich::DragonRealms::DRCT.walk_to(target, false) ? :arrived : :failed
+        rescue StandardError => e
+          respond "--- Lich: genie #goto error: #{e}"
+          :failed
+        end
+
+        # Genie node id (+ current zone) -> Lich room id; falls back to Lich id / uid.
+        # @return [Integer, nil]
+        def resolve_genie_room(node)
+          return nil if node.empty?
+
+          zone = Lich::Common::Map.current&.genie_zone
+          room = Lich::Common::Map.by_genie_ref(zone, node) if zone
+          return room.id if room
+          return unless node =~ /\A\d+\z/
+
+          id = node.to_i
+          return id if Lich::Common::Map.list[id]
+
+          Array(Lich::Common::Map.ids_from_uid(id)).first
         end
       end
 
@@ -138,6 +171,14 @@ module Lich
         Lich::Common::Script.start(name, args)
       rescue StandardError => e
         respond "--- Lich: genie could not launch script '#{name}': #{e}"
+      end
+
+      # `#goto <room>` from a script: walk there, then inject Genie's automapper
+      # result line into THIS script's downstream so its `matchwait YOU HAVE
+      # ARRIVED` / `... FAILED` resolves (the ARRIVED/FAILED shim).
+      def genie_goto(room)
+        arrived = GenieScript.genie_walk(room) == :arrived
+        @downstream_buffer.push(arrived ? 'YOU HAVE ARRIVED' : 'YOU HAVE FAILED')
       end
 
       # Resolve an `include <name>` against the Lich scripts dir (and custom/),
@@ -296,11 +337,12 @@ module Lich
         'roomname' => -> { LichGameState.clean_room_name },
         'roomtitle' => -> { XMLData.room_title }, 'roomdesc' => -> { XMLData.room_description },
         'roomexits' => -> { Array(XMLData.room_exits).join(', ') }, 'gameroomid' => -> { XMLData.room_id },
-        # $roomid is Genie's automapper current-room number. We have no automapper, so
-        # bridge it to Lich's room id (mapdb UID). NOTE: scripts that navigate by room
-        # number compare $roomid against configured target rooms -- those targets must
-        # be Lich room ids (or a Genie->Lich map applied) for the comparison to hold.
-        'roomid' => -> { XMLData.room_id },
+        # $roomid is Genie's automapper current-room (zone-local) node id. It is
+        # stamped on Lich rooms as genie_id; return the current room's, or "0" when
+        # unmapped -- which matches Genie's "mapper lost" value that scripts guard with
+        # `if $roomid = 0`. Configured targets ($part.room, ...) are Genie node ids and
+        # resolve via the current zone in #goto (Map.by_genie_ref).
+        'roomid' => -> { Lich::Common::Map.current&.genie_id || '0' },
         'roomobjs' => -> { LichGameState.room_objects.join('|') },
         'roomplayers' => -> { LichGameState.room_players.join('|') },
         'roomnote' => -> { '' }, 'inside' => -> { XMLData.room_inside ? 1 : 0 },

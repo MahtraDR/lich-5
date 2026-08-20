@@ -33,13 +33,14 @@ end
 # End-to-end tests: real Genie scripts compiled and run through the full pipeline
 # (Lexer -> Interpreter -> Substitution/Eval/MathCalc) against fake ports.
 RSpec.describe Lich::Genie::Interpreter do
-  def run_script(source, input_lines: [], game_state: nil, include_loader: nil, clock: nil)
+  def run_script(source, input_lines: [], game_state: nil, include_loader: nil, clock: nil, mover: nil)
     clock_ref = [0.0]
     clock_proc = clock || -> { clock_ref[0] }
     game = FakeGame.new
     echoes = []
     hooks = []
     launches = []
+    moves = []
     hook_sink = Object.new.tap do |o|
       o.define_singleton_method(:emit) { |op, payload| hooks << [op, payload] }
     end
@@ -53,9 +54,10 @@ RSpec.describe Lich::Genie::Interpreter do
       echo: ->(text) { echoes << text },
       hooks: hook_sink,
       launch: ->(name, args) { launches << [name, args] },
+      mover: mover || ->(room) { moves << room },
       clock: clock_proc
     )
-    { commands: game.commands, echoes: echoes, hooks: hooks, launches: launches }
+    { commands: game.commands, echoes: echoes, hooks: hooks, launches: launches, moves: moves }
   end
 
   describe 'control flow, variables, expressions (no waits)' do
@@ -290,6 +292,39 @@ RSpec.describe Lich::Genie::Interpreter do
       result = run_script(source)
       expect(result[:commands]).to eq(['attack kobold'])
       expect(result[:launches]).to be_empty
+    end
+
+    it 'routes #goto <room> to the mover, not the game' do
+      source = <<~GENIE
+        put #goto 93
+        exit
+      GENIE
+      result = run_script(source)
+      expect(result[:moves]).to eq(['93'])
+      expect(result[:commands]).to be_empty
+    end
+
+    it 'drives the automove pattern: #goto then matchwait on the arrival line' do
+      # Mirrors mastercraft automove: set matches, #goto, matchwait for the mapper
+      # result. The mover walks and (in Lich) injects YOU HAVE ARRIVED downstream;
+      # here we pre-queue that line to stand in for the injected shim message.
+      source = <<~GENIE
+        top:
+        match arrived YOU HAVE ARRIVED
+        match failed YOU HAVE FAILED
+        put #goto 93
+        matchwait
+        arrived:
+        echo made it to %c
+        exit
+        failed:
+        echo lost
+        exit
+      GENIE
+      moves = []
+      result = run_script(source, input_lines: ['YOU HAVE ARRIVED'], mover: ->(r) { moves << r })
+      expect(moves).to eq(['93'])
+      expect(result[:echoes]).to eq(['made it to %c'])
     end
 
     it 'routes a #command fired from within an async action' do

@@ -17,13 +17,14 @@ module Lich
       # @param launch [#call] callable(name, args) to start a script
       # @param hooks [#emit, nil] front-end effect sink
       # @param echo [#call] local echo sink
-      def initialize(vars:, eval:, game:, launch:, hooks: nil, echo: nil)
+      # @param mover [#call, nil] callable(room_arg) for #goto inside a trigger body
+      def initialize(vars:, eval:, game:, launch:, hooks: nil, echo: nil, mover: nil)
         @game = game
         @launch = launch
         @echo = echo || ->(_text) {}
         @substitution = Substitution.new(variables: vars)
         @router = CommandRouter.new(
-          vars: vars, eval: eval, hooks: hooks,
+          vars: vars, eval: eval, hooks: hooks, mover: mover,
           echo: @echo, send: ->(text) { send_text(text) }
         )
       end

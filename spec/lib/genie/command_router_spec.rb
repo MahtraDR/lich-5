@@ -15,10 +15,12 @@ RSpec.describe Lich::Genie::CommandRouter do
     collected = hooks
     Object.new.tap { |o| o.define_singleton_method(:emit) { |op, payload| collected << [op, payload] } }
   end
+  let(:moves) { [] }
   let(:router) do
     described_class.new(
       vars: vars, eval: evaluator, hooks: hook_sink,
-      echo: ->(t) { echoes << t }, send: ->(t) { sends << t }
+      echo: ->(t) { echoes << t }, send: ->(t) { sends << t },
+      mover: ->(room) { moves << room }
     )
   end
 
@@ -77,6 +79,14 @@ RSpec.describe Lich::Genie::CommandRouter do
     it '#if sends a plain then-branch to the game' do
       router.route('#if {1 = 1} {attack} {flee}')
       expect(sends).to eq(['attack'])
+    end
+
+    it '#goto routes to the mover (not the game); #mapper is a no-op' do
+      router.route('#goto 93')
+      router.route('#mapper reset')
+      expect(moves).to eq(['93'])
+      expect(sends).to be_empty
+      expect(hooks).to be_empty
     end
   end
 
