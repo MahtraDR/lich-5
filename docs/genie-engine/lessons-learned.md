@@ -193,6 +193,34 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   script logic reads), logs once, and skips redundant writes (unchanged content) to cut churn.
   General principle: reserved/config persistence is a side effect; script control flow must not
   depend on it succeeding.
+- **`#if {cond} {then} {else}` MUST run EVERY `;`-separated sub-command in the taken branch.**
+  Genie's `ParseCommand` splits its input on the separator char (`;`) FIRST, then dispatches each
+  row (Command.cs:240,248); `#if` routes the taken branch back through `ParseCommand`
+  (Command.cs:1100), so `{#var harn 0;#class spellprepared off;#class spellcast off}` runs all
+  three. Our `do_if` originally called `compute(branch)` -- treating the whole branch as ONE
+  command -- so only the first row ran (with the rest mangled into its args) and everything after
+  the first `;` vanished. The combat suite's **spellcast trigger** (commoncombattriggers.cmd) wraps
+  its entire reset block, ending in `#class spellcast off`, inside a single `#if {(\$pf=0)} {...}`
+  branch, so the class never turned off and the triggers looked dead -- the real "round 4" cause,
+  distinct from the earlier persistence crash. Fix: `do_if` -> `run_branch`, which `safe_split`s the
+  branch on `;` (brace-aware, so nested `#if {..} {..}` is preserved), runs each row, and returns
+  the LAST row's result (Genie resets `sResult` per row, so only the final row bubbles up to the
+  caller that sends it to the game). Verify branch coverage headlessly, not just parsing.
+- **Synthesized reserved namespaces with no writer (SpellTimer.*, skill/EXPTracker vars) must read
+  LIVE, not from a stale persisted store.** In real Genie the SpellTimer plugin rewrote
+  `#var SpellTimer.<spell>.active/.duration` every percwindow tick, so scripts read a fresh stored
+  value. Lich has NO such plugin -- we synthesize those names live from `dr_active_spells`/`DRSkill`.
+  But `Variables#global_get` read the store BEFORE live state (so a script's own `#var` wins, e.g.
+  `#var inside 1`). A tester migrating a Genie `variables.cfg` brings along stale `SpellTimer.*`
+  entries; with no writer to refresh them, they shadow the live value FOREVER -- e.g.
+  `$SpellTimer.Ignite.active` stuck at 0 -> the script recasts Ignite endlessly (Ignite is one of the
+  few spells guarded on `.active` rather than `.duration`). Fix: `game_state` may declare names
+  `authoritative?` (live-wins, store as fallback); `LichGameState` marks the SpellTimer + skill
+  namespaces. Scalar reserved vars are intentionally NOT authoritative, so scripts that shadow one
+  keep working. Semantics confirmed against the plugin: `.active` = presence in the percwindow
+  (== a key in `dr_active_spells`), `.duration` = roisaen; no per-spell special-casing for Ignite.
+  Diagnose live: `;eq echo Lich::Genie.global_store.keys.grep(/SpellTimer/)` (stale entries?) and
+  `;eq echo XMLData.dr_active_spells` (is the spell present under that name?).
 
 ## DR game-state (the big surprises)
 - **`XMLData` is shared GS/DR.** DR-specific state lives in DR modules.
