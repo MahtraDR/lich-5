@@ -68,5 +68,35 @@ RSpec.describe Lich::Genie::GlobalStore do
       expect(store.get('shared')).to eq('second')
       expect(store.get('extra')).to eq('new')
     end
+
+    # Regression: the store is shared by a script's thread AND the downstream/socket
+    # thread firing #triggers. Concurrent #var writes used to race reload_if_changed's
+    # transient "empty then repopulate", truncating variables.cfg and permanently
+    # dropping globals mid-combat (RIME/$qspell/$backpack going literal). Hammer two
+    # writers plus a reader and assert no persisted key is ever lost.
+    it 'never loses persistent keys under concurrent writers (thread safety)' do
+      store = described_class.new(file: path)
+      store.set('backpack', 'sling bag', persist: true) # a stable pre-set global
+      errors = []
+
+      writers = Array.new(2) do |w|
+        Thread.new do
+          100.times { |i| store.set("k#{w}_#{i % 5}", (w * 1000 + i).to_s, persist: true) }
+        rescue StandardError => e
+          errors << e
+        end
+      end
+      reader = Thread.new do
+        300.times { store.get('backpack') }
+      rescue StandardError => e
+        errors << e
+      end
+      (writers + [reader]).each(&:join)
+
+      expect(errors).to be_empty
+      expect(store.get('backpack')).to eq('sling bag') # survived the churn
+      # A fresh store reading the on-disk file must also still see it (no truncation).
+      expect(described_class.new(file: path).get('backpack')).to eq('sling bag')
+    end
   end
 end

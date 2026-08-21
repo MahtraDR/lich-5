@@ -260,6 +260,23 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   Format: `#var {key} {value}` (parsed by ParseArgs → our `Text.parse_args`). Only
   `bSaveToFile` (`#var`) is written; `#tvar` is memory-only.
 - We store under `<SCRIPT_DIR>/GenieProfiles/Config/variables.cfg`.
+- **R6 — globals reset to their literal text mid-combat (v0.8.0).** Symptom: after a long
+  combat run, `$rimon`/RIME stopped registering, then `$qspell`/`$backpack` went literal
+  (`put my cube in my $backpack`, `[Unknown label from GOTO: $qspell]`), and every global
+  read literal in the scripts launched *after* the buffer script exited. Root cause: the one
+  process-wide `GlobalStore` is written by BOTH a running script's thread (`#var`) AND the
+  downstream/socket thread firing `#triggers` (a combat trigger's `#var rimon 1`) — with **no
+  mutex**. Its `reload_if_changed` briefly EMPTIES the persistent keys before repopulating, so
+  a concurrent `save_file` could snapshot the emptied map and **truncate `variables.cfg`**;
+  a later reload then dropped the keys from memory too — permanent, progressive loss. (Quiet =
+  one writer = fine; combat = two writers racing = corruption, which is why it was intermittent
+  and worsened over a run.) `Triggers`/`StreamFilters` were already mutex-guarded for the exact
+  same cross-thread reason; `GlobalStore` was the one shared collection that wasn't. Fix:
+  serialize all `GlobalStore` public methods under `@mutex`, and rebuild `reload_if_changed`
+  **atomically** (read file → build new maps → swap; never leave `@values` transiently empty,
+  and a failed read keeps the in-memory copy). Regression: two-writer + reader thread hammer in
+  `global_store_spec.rb`. **Lesson: any collection reachable from both a script thread and the
+  trigger/downstream thread needs a lock — audit the shared `Lich::Genie.*` singletons.**
 
 ## Ruby / tooling gotchas
 - **AsciiOnlySource rubocop cop** rejects non-ASCII **including in comments** (an em-dash
