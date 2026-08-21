@@ -14,6 +14,13 @@ module Lich
   # Persistence uses Genie's own config-file model (no Lich DB): a Genie-style
   # `Config/` tree under {config_dir}. See docs Decision 7.
   module Genie
+    # Engine build id. BUMP THIS on every shipped change so a tester can confirm they
+    # actually picked up a branch update: `;eq echo Lich::Genie::VERSION`. The deploy
+    # path (`;lich5-update --branch=...`) overwrites files from a tarball WITHOUT moving
+    # git HEAD, so `git log`/commit hashes are not a reliable "which version am I on"
+    # signal -- this constant is. Format: MAJOR.MINOR.PATCH (YYYY-MM-DD).
+    VERSION = '0.5.0 (2026-08-21)'
+
     # Raised for any Genie-engine evaluation/parse error. Callers that mirror
     # Genie's "swallow and default" behavior (e.g. `evalmath`) rescue this.
     class Error < StandardError; end

@@ -101,6 +101,9 @@ module Lich
           return if @downstream_installed
 
           @downstream_installed = true
+          # One-time-per-session banner so a tester sees the running build in their log
+          # without having to ask (and can still echo Lich::Genie::VERSION on demand).
+          respond "--- Genie engine v#{Lich::Genie::VERSION} active"
           runner = trigger_runner
           Lich::Common::DownstreamHook.add('genie-downstream', lambda { |server_string|
             begin
