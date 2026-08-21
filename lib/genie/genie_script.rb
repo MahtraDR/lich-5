@@ -121,7 +121,10 @@ module Lich
                 end
               end
               Lich::Genie.triggers.apply(line) do |commands, captures|
-                respond "--- genie trigger FIRED: #{commands[0, 60]}" if Lich::Genie.trace_triggers
+                # The ';' COUNT is a rendering-proof signal: if a front-end eats ';' in
+                # echoed text, the command string itself is still intact (count > 0);
+                # count 0 means the separators were genuinely stripped before storage.
+                respond "--- genie trigger FIRED [#{commands.count(';')} ';']: #{commands[0, 60]}" if Lich::Genie.trace_triggers
                 runner.fire(commands, captures)
               end
             rescue StandardError => e
