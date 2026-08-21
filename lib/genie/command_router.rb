@@ -167,14 +167,37 @@ module Lich
         ''
       end
 
-      # #if {cond} {then} {else}: evaluate cond, route the taken branch (Command.cs:1088).
+      # #if {cond} {then} {else}: evaluate cond, then run the taken branch (Command.cs:1088).
+      # Genie routes the branch back through ParseCommand, which FIRST splits it on the
+      # separator char (`;`) and executes each sub-command -- so a branch like
+      # `{#class a off;#var harn 0;#class spellcast off}` runs ALL of its parts, not just
+      # the first. run_branch mirrors that; treating the branch as one command (the old
+      # behavior) silently dropped every sub-command after the first, which broke the
+      # combat suite's spellcast trigger (its whole body lives in an #if branch).
       def do_if(args)
         return '' if args.length < 3
 
         branch = @eval.do_eval(args[1].to_s) ? args[2] : args[3]
         return '' if branch.nil?
 
-        branch.to_s.lstrip.start_with?('#') ? compute(branch.to_s) : branch.to_s
+        run_branch(branch.to_s)
+      end
+
+      # Run a `;`-separated command line (an #if branch), returning the LAST row's
+      # result -- Genie's ParseCommand resets sResult per row, so only the final row's
+      # value bubbles up to the caller (which sends it to the game if non-empty). Each
+      # `#`-row executes for its side effects (nested #if/#var/#class); a non-`#` row is
+      # plain text whose value only surfaces as the branch result (Genie leaves it unsent
+      # here because #if calls ParseCommand with bSendToGame=false).
+      def run_branch(text)
+        result = ''
+        Text.safe_split(text, ';').each do |piece|
+          row = piece.to_s.strip
+          next if row.empty?
+
+          result = row.start_with?('#') ? compute(row).to_s : row
+        end
+        result
       end
 
       # --- engine-side: echo -----------------------------------------------

@@ -54,4 +54,21 @@ RSpec.describe Lich::Genie::TriggerRunner do
     runner.fire('#class combat off', [])
     expect(hooks).to eq([['class', { 'name' => 'combat', 'enabled' => false }]])
   end
+
+  # The combat suite's spellcast trigger (commoncombattriggers.cmd) wraps its whole
+  # reset block -- ending in `#class spellcast off` -- inside a single `#if` branch.
+  # Before the do_if ;-split fix only the first sub-command ran, so `harn` never
+  # cleared and `#class spellcast off` never fired: "triggers/#class do not work".
+  it 'runs the full reset block of an #if-wrapped trigger body (the spellcast pattern)' do
+    vars.global_set('pf', '0')
+    vars.global_set('harn', '3')
+    vars.global_set('spellready', '1')
+    action = '#if {($pf = 0)} {#if {($harn != 0)} {#var harn 0};' \
+             '#if {($spellready != 0)} {#var spellready 0};#var prepm 0;#class spellcast off}'
+    runner.fire(action, [])
+    expect(vars.global_get('harn')).to eq('0')
+    expect(vars.global_get('spellready')).to eq('0')
+    expect(vars.global_get('prepm')).to eq('0')
+    expect(hooks).to include(['class', { 'name' => 'spellcast', 'enabled' => false }])
+  end
 end

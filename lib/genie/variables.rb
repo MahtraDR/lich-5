@@ -44,7 +44,21 @@ module Lich
       # --- global ($) -------------------------------------------------------
 
       # @return [String, nil] store value, else reserved game state
+      #
+      # Normally the persisted store wins over live game state, so a script's own
+      # `#var` (even one that shadows a reserved name, e.g. `#var inside 1`) is
+      # authoritative. But some synthesized namespaces (SpellTimer.*, skill vars) are
+      # provided live in Lich with NO writer to keep a stored copy fresh -- in real
+      # Genie a plugin rewrote them every tick. A stale value migrated from a Genie
+      # variables.cfg would otherwise shadow the live value forever (e.g. Ignite reading
+      # perpetually inactive -> endless recast). For names the resolver declares
+      # authoritative, live state wins and the store is only a fallback.
       def global_get(name)
+        if @game_state.respond_to?(:authoritative?) && @game_state.authoritative?(name)
+          live = @game_state[name]
+          return live unless live.nil?
+        end
+
         value = @store.get(name)
         return value unless value.nil?
 

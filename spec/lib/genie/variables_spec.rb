@@ -53,4 +53,34 @@ RSpec.describe Lich::Genie::Variables do
       expect(variables.get(:global, 'x')).to eq('global')
     end
   end
+
+  describe 'authoritative (live-wins) game state' do
+    # A resolver may declare some names live-authoritative (SpellTimer.*, skill vars):
+    # names it synthesizes each read with no writer to refresh a stored copy. For those,
+    # live state must win over a stale value migrated into the store, or the stale copy
+    # shadows reality forever (Ignite reading perpetually inactive -> endless recast).
+    let(:game_state) do
+      live = { 'SpellTimer.Ignite.active' => '1', 'health' => '100' }
+      Object.new.tap do |o|
+        o.define_singleton_method(:[]) { |n| live[n] }
+        o.define_singleton_method(:key?) { |n| live.key?(n) }
+        o.define_singleton_method(:authoritative?) { |n| n.start_with?('SpellTimer.') }
+      end
+    end
+
+    it 'lets live state win over a stale stored value for authoritative names' do
+      variables.global_set('SpellTimer.Ignite.active', '0') # e.g. migrated from a Genie variables.cfg
+      expect(variables.global_get('SpellTimer.Ignite.active')).to eq('1')
+    end
+
+    it 'still falls back to the store for authoritative names the resolver returns nil for' do
+      variables.global_set('SpellTimer.Unknown.active', '0')
+      expect(variables.global_get('SpellTimer.Unknown.active')).to eq('0')
+    end
+
+    it 'does NOT flip precedence for non-authoritative reserved names (stored #var still wins)' do
+      variables.global_set('health', '42')
+      expect(variables.global_get('health')).to eq('42')
+    end
+  end
 end

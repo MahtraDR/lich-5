@@ -81,6 +81,31 @@ RSpec.describe Lich::Genie::CommandRouter do
       expect(sends).to eq(['attack'])
     end
 
+    it '#if runs EVERY ;-separated sub-command in the taken branch, not just the first' do
+      # Genie's ParseCommand splits the branch on ';' -- the combat suite's spellcast
+      # trigger relies on this (its whole reset block, ending in #class spellcast off,
+      # lives inside one #if branch). Regression for "triggers/#class do not work".
+      router.route('#var harn 3')
+      router.route('#if {1 = 1} {#var a 1;#var harn 0;#class spellcast off} {#var b 2}')
+      expect(vars.global_get('a')).to eq('1')
+      expect(vars.global_get('harn')).to eq('0')
+      expect(vars.global_get('b')).to be_nil # else-branch not taken
+      expect(hooks).to include(['class', hash_including('name' => 'spellcast', 'enabled' => false)])
+    end
+
+    it '#if evaluates nested #if sub-commands inside a taken branch' do
+      router.route('#var harn 5')
+      router.route('#if {1 = 1} {#if {($harn != 0)} {#var harn 0};#var done 1} {}')
+      expect(vars.global_get('harn')).to eq('0')
+      expect(vars.global_get('done')).to eq('1')
+    end
+
+    it '#if returns the LAST row of a multi-command branch as the game send (Genie sResult)' do
+      router.route('#if {1 = 1} {#var q 1;north} {south}')
+      expect(vars.global_get('q')).to eq('1')
+      expect(sends).to eq(['north'])
+    end
+
     it '#goto routes to the mover (not the game); #mapper is a no-op' do
       router.route('#goto 93')
       router.route('#mapper reset')

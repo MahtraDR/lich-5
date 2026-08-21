@@ -404,6 +404,16 @@ module Lich
           Reserved.spell_timer?(name) || (skills_available? && Reserved.skill_var?(name))
       end
 
+      # Names this resolver owns LIVE with no external writer to refresh a stored copy:
+      # the SpellTimer and EXPTracker/skill namespaces (a real Genie plugin rewrote
+      # these each tick; Lich synthesizes them). For these, live state must win over a
+      # value migrated into variables.cfg, or the stale copy shadows reality forever.
+      # Scalar reserved vars are deliberately excluded -- scripts shadow some (e.g.
+      # `#var inside 1`) and expect their #var to stick.
+      def authoritative?(name)
+        Reserved.spell_timer?(name) || (skills_available? && Reserved.skill_var?(name))
+      end
+
       def [](name)
         key = name.to_s.downcase
         if (resolver = RESOLVERS[key])
