@@ -111,7 +111,15 @@ module Lich
               # so drop tags + surrounding whitespace for the match; gag/sub still
               # operate on the real line.
               line = server_string.gsub(/<[^>]+>/, '').strip
-              respond "--- genie rx: #{line[0, 100].inspect}" if Lich::Genie.trace_triggers && !line.empty?
+              if Lich::Genie.trace_triggers && !line.empty?
+                respond "--- genie rx: #{line[0, 100].inspect}"
+                # Show WHICH triggers match this line and whether their class is on --
+                # distinguishes "did not match" from "matched but class off" (dead-looking).
+                Lich::Genie.triggers.diagnose(line).each do |m|
+                  state = m['active'] ? 'ACTIVE' : "INACTIVE (class '#{m['class']}' off)"
+                  respond "--- genie trigger MATCH [#{state}]: /#{m['pattern'][0, 60]}/"
+                end
+              end
               Lich::Genie.triggers.apply(line) do |commands, captures|
                 respond "--- genie trigger FIRED: #{commands[0, 60]}" if Lich::Genie.trace_triggers
                 runner.fire(commands, captures)

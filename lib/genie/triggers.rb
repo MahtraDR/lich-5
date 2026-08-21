@@ -88,6 +88,24 @@ module Lich
         matches.each { |commands, captures| yield(commands, captures) }
       end
 
+      # Diagnostic: every trigger whose regex matches +line+, with its class and
+      # active state -- so a trace can tell "the pattern did not match" apart from
+      # "it matched but its class is off" (the usual reason a trigger looks dead).
+      # Does NOT run any actions.
+      # @param line [String]
+      # @return [Array<Hash>]
+      def diagnose(line)
+        return [] unless line.is_a?(String)
+
+        @mutex.synchronize do
+          @triggers.values.filter_map do |t|
+            next unless t.regex.match?(line)
+
+            { 'pattern' => t.pattern, 'class' => t.klass, 'active' => t.active }
+          end
+        end
+      end
+
       private
 
       def compile(pattern)

@@ -76,4 +76,20 @@ RSpec.describe Lich::Genie::Triggers do
       expect(fired('what (is this')).to eq([['echo hi', []]])
     end
   end
+
+  describe '#diagnose' do
+    it 'reports matching triggers with class + active state, without firing' do
+      triggers.add('^You gesture', 'put x', klass: 'spellcast')
+      triggers.add('^You tap', 'put y', klass: 'harness')
+      triggers.set_class('spellcast', false) # class off -> would not fire
+
+      result = triggers.diagnose('You gesture.')
+      expect(result).to eq([{ 'pattern' => '^You gesture', 'class' => 'spellcast', 'active' => false }])
+    end
+
+    it 'returns an empty array when nothing matches' do
+      triggers.add('^You gesture', 'put x')
+      expect(triggers.diagnose('nothing here')).to eq([])
+    end
+  end
 end
