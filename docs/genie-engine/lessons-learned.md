@@ -206,6 +206,19 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   branch on `;` (brace-aware, so nested `#if {..} {..}` is preserved), runs each row, and returns
   the LAST row's result (Genie resets `sResult` per row, so only the final row bubbles up to the
   caller that sends it to the game). Verify branch coverage headlessly, not just parsing.
+- **Build the trigger match line with Lich's `strip_xml`, NOT a naive `gsub(/<[^>]+>/,'')`.** A naive
+  tag-strip keeps the TEXT of GUI-only elements and glues it onto the real line. After a `cast`, DR
+  sends `<spell>None</spell>You gesture.` in one chunk; the naive strip yields `"NoneYou gesture."`,
+  so the `^You gesture` spellcast trigger never matches -> its var resets + `#class spellcast off`
+  never run -> the script casts twice and "doesn't read the variable changes" (the real round-4/5
+  cause; class-gating and the `;` were fine all along). `strip_xml_simple` (global_defs.rb) removes
+  the content of `compDef|inv|component|right|left|spell|prompt` elements, decodes entities, and
+  returns nil for blank lines -- exactly what Genie matches (main-window text). The genie-downstream
+  hook now uses `strip_xml`. TELL: a trace line showing the prompt as `&gt` (missing its own `;` from
+  `&gt;`) or a game line with a glued prefix (`NoneYou gesture.`, `spiritwood cubeYour worn items`)
+  means the raw-chunk text nodes are being concatenated -- switch to strip_xml. Also: a front-end can
+  eat `;` in ECHOED output, so a traced command may look like it lost its separators when the stored
+  string is intact -- use a rendering-proof signal (a COUNT) to check, not the echoed text.
 - **Synthesized reserved namespaces with no writer (SpellTimer.*, skill/EXPTracker vars) must read
   LIVE, not from a stale persisted store.** In real Genie the SpellTimer plugin rewrote
   `#var SpellTimer.<spell>.active/.duration` every percwindow tick, so scripts read a fresh stored

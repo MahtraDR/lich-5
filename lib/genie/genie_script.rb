@@ -107,10 +107,16 @@ module Lich
           runner = trigger_runner
           Lich::Common::DownstreamHook.add('genie-downstream', lambda { |server_string|
             begin
-              # Triggers match the DISPLAYED text (Genie strips XML before matching),
-              # so drop tags + surrounding whitespace for the match; gag/sub still
-              # operate on the real line.
-              line = server_string.gsub(/<[^>]+>/, '').strip
+              # Triggers match the DISPLAYED main-window text (Genie strips XML before
+              # matching), so build the match line with Lich's strip_xml, NOT a naive
+              # tag-strip. strip_xml removes the CONTENT of GUI-only elements
+              # (spell/component/right/left/prompt); a naive gsub keeps that text and
+              # GLUES it onto the real line -- e.g. after a `cast`, DR sends
+              # `<spell>None</spell>You gesture.`, which a tag-strip turns into
+              # "NoneYou gesture." so a `^You gesture` trigger never matches (the round-4
+              # "spellcast trigger doesn't fire / double cast" bug). gag/sub still operate
+              # on the raw server_string below. strip_xml returns nil for blank lines.
+              line = (respond_to?(:strip_xml) ? strip_xml(server_string).to_s : server_string.gsub(/<[^>]+>/, '')).strip
               if Lich::Genie.trace_triggers && !line.empty?
                 respond "--- genie rx: #{line[0, 100].inspect}"
                 # Show WHICH triggers match this line and whether their class is on --
