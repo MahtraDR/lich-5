@@ -219,6 +219,18 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   means the raw-chunk text nodes are being concatenated -- switch to strip_xml. Also: a front-end can
   eat `;` in ECHOED output, so a traced command may look like it lost its separators when the stored
   string is intact -- use a rendering-proof signal (a COUNT) to check, not the echoed text.
+- **`respond_to?(:strip_xml)` is FALSE in a running Lich -- the guard silently killed the fix above
+  (v0.8.1).** `strip_xml` is a **top-level `def`** in global_defs.rb, which Ruby makes a **private**
+  method on Object. `respond_to?(sym)` excludes private methods (only `respond_to?(sym, true)` sees
+  them), so the guard `respond_to?(:strip_xml) ? strip_xml(x) : naive(x)` ALWAYS took the naive
+  fallback -- the strip_xml branch was dead code from the day it was added. R5 therefore only *looked*
+  fixed: prefix-free `wave`/pf casts ("You gesture." with no `<spell>None</spell>`) matched under the
+  naive strip, while every prepared-spell `cast` still double-cast. It resurfaced as "back to square
+  one on spellcast" a version later, unrelated to whatever else changed. Fix: **call `strip_xml`
+  directly** (private methods are callable with an implicit receiver) inside a `begin/rescue NameError`
+  that only falls back to the naive strip when strip_xml is genuinely absent (headless specs). See
+  `GenieScript.strip_xml_line`. General rule: to feature-detect a Lich top-level helper, `rescue
+  NameError` around a real call -- never `respond_to?` (it can't see private/top-level defs).
 - **Synthesized reserved namespaces with no writer (SpellTimer.*, skill/EXPTracker vars) must read
   LIVE, not from a stale persisted store.** In real Genie the SpellTimer plugin rewrote
   `#var SpellTimer.<spell>.active/.duration` every percwindow tick, so scripts read a fresh stored

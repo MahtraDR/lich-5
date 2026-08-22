@@ -116,7 +116,7 @@ module Lich
               # "NoneYou gesture." so a `^You gesture` trigger never matches (the round-4
               # "spellcast trigger doesn't fire / double cast" bug). gag/sub still operate
               # on the raw server_string below. strip_xml returns nil for blank lines.
-              line = (respond_to?(:strip_xml) ? strip_xml(server_string).to_s : server_string.gsub(/<[^>]+>/, '')).strip
+              line = strip_xml_line(server_string).strip
               if Lich::Genie.trace_triggers && !line.empty?
                 respond "--- genie rx: #{line[0, 100].inspect}"
                 # Show WHICH triggers match this line and whether their class is on --
@@ -138,6 +138,26 @@ module Lich
             end
             Lich::Genie.stream_filters.apply(server_string)
           }, persist: true)
+        end
+
+        # Build a trigger-match line from a raw server chunk with Lich's strip_xml.
+        #
+        # CRITICAL: strip_xml is a TOP-LEVEL `def` in a real Lich (global_defs.rb),
+        # which Ruby makes a PRIVATE method on Object. `respond_to?(:strip_xml)` is
+        # therefore FALSE (it excludes private methods) even though strip_xml is fully
+        # callable here with an implicit receiver. The old `respond_to?` guard thus
+        # ALWAYS took the naive-gsub fallback -- the strip_xml path was dead code, so
+        # the R5 "spellcast doesn't fire / double-cast" bug was never actually fixed
+        # for prepared-spell casts (their `<spell>None</spell>You gesture.` prefix
+        # glued to "NoneYou gesture."; only prefix-free `wave` casts happened to work).
+        # Call strip_xml directly and fall back to the naive strip ONLY when it is
+        # genuinely absent (headless specs), detected via NameError. strip_xml may
+        # return nil (blank line) -> coerce to "".
+        # @return [String]
+        def strip_xml_line(server_string)
+          strip_xml(server_string).to_s
+        rescue NameError
+          server_string.gsub(/<[^>]+>/, '')
         end
 
         # Global-scoped runner that executes trigger actions (shared global store, so
