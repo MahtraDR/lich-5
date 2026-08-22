@@ -797,6 +797,65 @@ Also available: `$time`, `$date`, `$year`, `$month`, and related time values.
 
 ---
 
+## 13b. Surfacing creature IDs in ASSESS (opt-in shim)
+
+DragonRealms tags every creature in the `assess` combat stream with its **exist-id**, but Lich
+normally strips that tag before your script sees it — so the id is gone from the visible text.
+Front-ends like ProfanityFE re-add it as `[#nnnnn]`, which is why scripts that target by id match
+`\[#(\d+)\]` in the assess line. That ties those scripts to one front-end.
+
+The **assess-ids shim** moves that surfacing into Lich. When on, it re-emits each assess creature
+line with the id spliced back into the visible text — exactly where a front-end would put it:
+
+```
+You (incredibly balanced) are facing an elder Adan'f sorcerer [#78195083] (2) at melee range.
+```
+
+So a pattern you already use keeps working, unchanged, in **both** the in-Lich engine and native
+Genie-over-Lich, regardless of front-end:
+
+```
+matchre TargetCBG ^You \(.*?\).*?\[#(\d+)\].*?at.*?range\.
+put assess
+matchwait
+# $1 now holds the creature's exist-id
+```
+
+It only **adds** id-annotated lines; the normal assess output and all of Lich's own creature
+tracking are untouched.
+
+### Turning it on
+
+It is **off by default** and set **per character** (like the engine toggle). Turn it on with:
+
+```
+;e Lich::Genie::AssessIds.enabled = true
+```
+
+(Tirost's front-end uses `,` as its script character, so for him: `,e Lich::Genie::AssessIds.enabled = true`.)
+
+- **In-Lich engine:** that's it — the shim re-arms itself automatically each session the next time a
+  `.cmd` script runs, so you set it once.
+- **Native Genie over Lich:** the setting persists, but the hook must be re-installed each login. Add
+  this one line to your Lich autostart (e.g. a small `.lic`, or your existing startup script):
+
+  ```ruby
+  Lich::Genie::AssessIds.install! if Lich::Genie::AssessIds.enabled?
+  ```
+
+Check status any time:
+
+```
+;e echo Lich::Genie::AssessIds.enabled?   # persisted on/off
+;e echo Lich::Genie::AssessIds.active?    # hook armed this session?
+```
+
+Turn it back off with `;e Lich::Genie::AssessIds.enabled = false`.
+
+> Requires Genie engine **v0.9.0+** (`;eq echo Lich::Genie::VERSION`).
+
+---
+
 ## 14. Running, listing, and stopping scripts
 
 - **Run a script:** `;name` (leave off `.cmd`). Example: `;mytest`.

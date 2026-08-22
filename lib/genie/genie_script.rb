@@ -104,6 +104,9 @@ module Lich
           # One-time-per-session banner so a tester sees the running build in their log
           # without having to ask (and can still echo Lich::Genie::VERSION on demand).
           respond "--- Genie engine v#{Lich::Genie::VERSION} active"
+          # Self-install the opt-in assess exist-id shim so it survives relogin under
+          # the in-Lich engine (native-Genie users install it from autostart instead).
+          Lich::Genie::AssessIds.install! if Lich::Genie::AssessIds.enabled?
           runner = trigger_runner
           Lich::Common::DownstreamHook.add('genie-downstream', lambda { |server_string|
             begin

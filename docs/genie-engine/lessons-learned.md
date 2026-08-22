@@ -282,6 +282,33 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   are set by the parser from the live stream and are **NOT in config files** — bridge them
   from Lich state. Only user `#var` vars live in `variables.cfg`.
 
+## Cross-engine interop (native Genie-over-Lich AND the in-Lich engine)
+- **The only channel BOTH environments share is the game stream.** Native Genie is a client behind
+  Lich's proxy: it sees whatever Lich writes to the client (server stream + any Lich `respond`), runs
+  its own scripts/plugins/reserved vars. The in-Lich engine runs Genie scripts as Lich scripts that
+  read live Lich state + the downstream stream. So a "works in both" feature must produce data in Lich
+  and let the scripts consume it via the stream (matchwait/trigger) or via a shared var NAME backed
+  per-environment (the `$SpellTimer.*` model: a Genie plugin fills it natively, we synthesize it).
+- **A Lich script's `respond`/`_respond` reaches native Genie but NOT the in-Lich engine's triggers.**
+  `respond` writes to the client (`puts_main_stream`) + `Script.new_script_output` (only scripts with
+  `want_script_output=true`, which GenieScript is not). The in-Lich engine's triggers run on the server
+  `DownstreamHook`; its `matchwait` reads the script `downstream_buffer` (fed by `Script.new_downstream`
+  with the ORIGINAL, pre-hook stripped server line). So to feed the in-Lich engine you push via
+  `Script.new_downstream`; to feed native Genie you write to the client. Different calls, same content.
+- **Assess exist-ids: surface them in Lich, don't reinvent them (v0.9.0 `AssessIds` shim).** DR sends
+  each creature as `<d cmd='look #NNN'>name</d>` in a `<pushStream id='assess'>..<popStream/>` block
+  (Lich already parses this into the `Creature` module). The `[#nnnnn]` scripts match is a FRONT-END
+  annotation (ProfanityFE), not game text, so id-targeting scripts silently depend on that FE. The
+  opt-in shim re-emits each assess creature line with the id spliced back into the visible text
+  (`name [#id]`) so the UNMODIFIED scripts match in both engines / any FE. Key design points: (1) it
+  PASSES THE STREAM THROUGH unchanged and only ADDS lines, so XMLData/Creature parsing is untouched;
+  (2) delivery is environment-aware -- `$frontend == 'genie'` -> `_respond` (native Genie matches its
+  displayed text); else -> `Script.new_downstream` (in-Lich engine `matchwait`, no duplicate FE line);
+  (3) the id is read straight from the tag (no re-parse); (4) per-character toggle
+  `Lich::Genie::AssessIds.enabled = true`, self-installs from `ensure_downstream_hook!` for the in-Lich
+  engine, needs an autostart `install!` line for native-Genie-only. The pure `enrich`/`enrich_block`
+  transform is unit-tested against Tirost's real `commonbg.cmd` regex so format fidelity can't drift.
+
 ## Persistence / config model
 - Genie persists globals to the **global** `Config/variables.cfg` → account-wide/cross-char.
   Format: `#var {key} {value}` (parsed by ParseArgs → our `Text.parse_args`). Only

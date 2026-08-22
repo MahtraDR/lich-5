@@ -19,7 +19,7 @@ module Lich
     # path (`;lich5-update --branch=...`) overwrites files from a tarball WITHOUT moving
     # git HEAD, so `git log`/commit hashes are not a reliable "which version am I on"
     # signal -- this constant is. Format: MAJOR.MINOR.PATCH (YYYY-MM-DD).
-    VERSION = '0.8.2 (2026-08-23)'
+    VERSION = '0.9.0 (2026-08-23)'
 
     # Raised for any Genie-engine evaluation/parse error. Callers that mirror
     # Genie's "swallow and default" behavior (e.g. `evalmath`) rescue this.
@@ -175,6 +175,7 @@ require_relative 'genie/math_calc'
 require_relative 'genie/math_eval'
 require_relative 'genie/eval'
 require_relative 'genie/reserved'
+require_relative 'genie/assess_ids'
 require_relative 'genie/variable_file'
 require_relative 'genie/global_store'
 require_relative 'genie/stream_filters'
