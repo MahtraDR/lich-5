@@ -264,6 +264,58 @@ RSpec.describe Lich::Genie::Interpreter do
       expect(result[:hooks].map(&:first).uniq).to eq(['class'])
     end
 
+    it 'does not trip the wall-clock deadline while a game send blocks on a long RT' do
+      # Regression: LichGamePort#send_command calls waitrt? and BLOCKS for the whole
+      # roundtime before sending. A 20s invoke / long barrage would then push the next
+      # runaway check past the 5s deadline and falsely kill the script mid-combat.
+      # Model that block by advancing the clock 6s (> the 5s deadline) inside each send;
+      # all three sequential sends must still go through, with no timeout.
+      clock_ref = [0.0]
+      sent = []
+      rt_game = Object.new.tap do |g|
+        g.define_singleton_method(:send_command) do |text|
+          sent << text
+          clock_ref[0] += 6.0 # simulate a 6s roundtime block inside the send (waitrt?)
+        end
+      end
+      echoes = []
+      no_hooks = Object.new.tap { |o| o.define_singleton_method(:emit) { |_op, _p| } }
+      source = <<~GENIE
+        put invoke my sword
+        put retreat
+        put sheath my sword
+        exit
+      GENIE
+      Lich::Genie::Engine.run(
+        source, name: 'test', game: rt_game, input: FakeInput.new([], clock_ref),
+        echo: ->(text) { echoes << text }, hooks: no_hooks,
+        launch: ->(_n, _a) {}, mover: ->(_r) {}, clock: -> { clock_ref[0] }
+      )
+      expect(sent).to eq(['invoke my sword', 'retreat', 'sheath my sword'])
+      expect(echoes.join).not_to match(/Possible infinite loop/)
+    end
+
+    it 'does not trip the send-history guard for a combat loop that waits each cycle' do
+      # Regression: a loop that sends a command then WAITS (matchwait/pause) every
+      # cycle is game-responsive, not a runaway -- but 40 sends inside the rolling 10s
+      # window used to trip the 30-total send guard. A wait resumes into a fresh
+      # run_rows, which now clears the send history, so only a wait-LESS loop keeps
+      # accumulating. Here 40 attacks paced by a 0.1s pause must all fire.
+      source = <<~GENIE
+        setvariable i 0
+        top:
+        put attack
+        math i add 1
+        pause 0.1
+        if %i < 40 then goto top
+        exit
+      GENIE
+      result = run_script(source)
+      expect(result[:commands].length).to eq(40)
+      expect(result[:commands].uniq).to eq(['attack'])
+      expect(result[:echoes].join).not_to match(/Possible infinite loop/)
+    end
+
     it 'launches another script with put .name (Genie ScriptChar), not a game command' do
       source = <<~GENIE
         put .helper foo bar

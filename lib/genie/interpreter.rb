@@ -118,9 +118,16 @@ module Lich
       # --- main row loop (RunScript) ----------------------------------------
 
       def run_rows
-        # Reset the runaway deadline for each continuous run (matches Genie resetting
-        # oTimerStart per RunScript call; a wait resumes into a fresh run_rows).
+        # A run_rows entry is the initial start OR a resume from a wait
+        # (matchwait/pause/waitfor/wait/move) -- i.e. the script just made real
+        # progress (a game round-trip or a genuine wait), NOT a tight loop. Reset BOTH
+        # runaway guards here: the wall-clock deadline (Genie resets oTimerStart per
+        # RunScript call) AND the send-history window. Clearing send-history is what
+        # keeps a legit combat loop that waits every cycle (assess -> matchwait -> act
+        # -> goto) from eventually tripping the 30-sends/10s total; only a loop that
+        # spins WITHOUT ever waiting keeps accumulating across iterations.
         @run_deadline = now + SCRIPT_TIMEOUT_SECONDS
+        @send_history.clear
         while @state == :running
           index = @call_stack.line_value
           if index >= @program.instructions.length
@@ -228,6 +235,14 @@ module Lich
         return if loop_guard_tripped?(text)
 
         @game&.send_command(text)
+        # A game send is a progress point -- and send_command may have just BLOCKED in
+        # waitrt? for a long roundtime (e.g. a 20s invoke or a barrage). Reset the
+        # wall-clock deadline AFTER the send so RT-wait time is not counted as
+        # "continuous loop time"; otherwise a long RT between two sends falsely trips
+        # the runaway timeout mid-combat (this killed sc right after invoke/barrage).
+        # The wall-clock now guards only send-LESS loops (pure goto/var/hook); loops
+        # that emit game commands are caught by the send-history guard instead.
+        @run_deadline = now + SCRIPT_TIMEOUT_SECONDS
         local_set('lastcommand', text)
       end
 

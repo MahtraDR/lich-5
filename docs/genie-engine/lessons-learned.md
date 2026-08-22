@@ -50,6 +50,21 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   entry (= Genie resetting oTimerStart per RunScript; a wait resumes into a fresh run). The include
   idiom `goto %<caller-return-label>` still needs a caller that sets the label; standalone dry-runs
   inject a terminal label (see spec/fixtures/genie + fixtures_spec).
+- **The guards must NOT count roundtime/wait time as loop time (v0.8.2).** Two live-combat false
+  positives, both because a legitimate WAIT was being charged against a runaway guard:
+  (a) **Long-RT sends tripped the wall-clock.** Our thread model paces on RT by BLOCKING in
+  `LichGamePort#send_command` (`waitrt?`) *inside* a row, unlike Genie's cooperative tick where a
+  send yields. So a 20s `invoke` / a `barrage` between two sends pushed the next runaway check past
+  the 5s deadline and killed the script (`[Script timeout in ...(row): Possible infinite loop.]`
+  right after a legit command). Fix: **reset `@run_deadline` AFTER each game send** — RT-wait time
+  is then excluded, and the wall-clock guards only send-LESS loops (pure goto/var/hook), which is
+  its actual purpose. (b) **A combat loop that waits each cycle tripped the send-history total.** A
+  loop like `assess -> matchwait -> act -> goto` is game-responsive, but 30 sends inside the rolling
+  10s window trip guard (1) even though every cycle waited. Fix: **clear `@send_history` on each
+  `run_rows` entry** (a wait-resume). Now only a loop that spins WITHOUT ever waiting keeps
+  accumulating across iterations. Net division of labor: wall-clock = send-less spin; send-history =
+  send-driven spin with no waits. Regressions in interpreter_spec (a clock-advancing game for RT;
+  a 40-attack pause-paced loop).
 - **`#command` arg formats (Command.cs runtime handlers, all ported to command_router.rb):**
   `#trigger {pat}{cmds}{class?}`; `#class name on|off` or `#class +a -b`; `#highlight {line|string|
   beginswith|regex} {color} {pattern...} [case] [sound] [class] [active]` (+`clear`; **pattern is
