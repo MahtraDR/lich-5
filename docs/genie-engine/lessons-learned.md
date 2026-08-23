@@ -261,6 +261,25 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   (== a key in `dr_active_spells`), `.duration` = roisaen; no per-spell special-casing for Ignite.
   Diagnose live: `;eq echo Lich::Genie.global_store.keys.grep(/SpellTimer/)` (stale entries?) and
   `;eq echo XMLData.dr_active_spells` (is the spell present under that name?).
+- **`#script abort/pause/resume` were silent no-ops -- implement the keyword, don't let it fall to a
+  `<genieHook>` (v0.9.1).** `command_router` had no `script` keyword, so `#script abort all` /
+  `#script abort all except <name>` fell through `dispatch_fe -> emit_generic` into a `<genieHook
+  op="script">` tag nothing consumes -- so sh.cmd ("stop combat") and sk.cmd ("skin dead stuff"),
+  which lean on `#script abort all [except ...]`, did nothing. Genie's chain is Command.cs:2188
+  (`case "script"`, subcommand switch) -> `FormMain.Command_ScriptAbort` (the name/"all"/"except"
+  matching, FormMain.cs:5561). We put the MATCHING in `CommandRouter` (testable headless) and the
+  kill/pause/unpause behind an injected `script_control` port (`LichScriptControl` in genie_script.rb).
+  Faithful matching, straight from FormMain: split off `except <name>`; a spec whose (`+" "`) form
+  starts with `"all "` -- or an EMPTY spec (`#script abort` with no arg) -- targets ALL; otherwise the
+  trimmed spec is an EXACT (case-sensitive) script name; the `except` name is always spared. Two
+  deliberate deviations from literal Genie, both safety: (1) **"all" is scoped to running GenieScript
+  (.cmd) instances only** -- a literal "abort all" over Lich's `Script.running` would also kill the
+  mapper/infomon/command-broker/unrelated .lic; Genie had no such daemons. (2) **the issuing script is
+  aborted LAST.** Genie's `AbortScript` is cooperative (flags the script to stop at its next tick), so
+  self-abort in a `foreach` doesn't interrupt the loop; Lich `Script#kill` is NOT cooperative (kills
+  the thread), so aborting self mid-iteration would strand the rest of an "abort all" -- so the router
+  moves `@script_name` to the end of the abort list. Diagnose live: `,e echo
+  Lich::Common::Script.running.select { |s| s.is_a?(Lich::Genie::GenieScript) }.map(&:name)`.
 
 ## DR game-state (the big surprises)
 - **`XMLData` is shared GS/DR.** DR-specific state lives in DR modules.

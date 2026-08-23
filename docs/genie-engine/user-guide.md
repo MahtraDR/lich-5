@@ -625,6 +625,36 @@ your scripts.
 > **You don't need to memorize the `#` commands.** If your existing `.cmd` scripts already use them,
 > they'll just work (or be safely ignored). This section is here so you know what they are.
 
+### Group C — Controlling other scripts: `#script`
+
+One script can start, stop, pause, or resume another. Starting is just `put .name` (see §4). To
+**stop** scripts, use `#script`:
+
+```
+put #script abort sk               # stop the script named "sk"
+put #script abort all              # stop every running Genie (.cmd) script
+put #script abort all except sc    # stop every Genie script EXCEPT "sc"
+```
+
+This is how a "sheath and stop combat" or "skin the kill" script cleans up: `#script abort all
+except <the-script-that-should-keep-running>`. You can also pause and resume:
+
+```
+put #script pause all              # pause every running Genie script
+put #script resume sc              # resume the script named "sc"
+put #script reload sc              # stop "sc" and start it again fresh
+```
+
+> **Two things worth knowing (and both are on purpose):**
+> - **`all` means your Genie `.cmd` scripts only** — it will *not* stop Lich's own background helpers
+>   (the mapper, your other `.lic` scripts, etc.). A stray `#script abort all` can't take down your
+>   session.
+> - **If a script aborts *itself* as part of `abort all`, it is stopped last** — so `#script abort
+>   all` from inside one script still stops all the others first.
+>
+> Names match exactly (`sc`, `chl`, `cl`). `#script abort` with no name behaves like `#script abort
+> all` (it stops everything) — the same as Genie.
+
 ---
 
 ## 12. Splitting a script into multiple files: `include`

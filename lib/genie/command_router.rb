@@ -2,6 +2,18 @@
 
 module Lich
   module Genie
+    # No-op script-control port (the default). Used headless (specs) or when no host
+    # script system is wired: there are no running scripts to enumerate and every
+    # lifecycle action is a silent no-op, so `#script abort/pause/...` do nothing.
+    class NullScriptControl
+      def names = []
+      def abort(_name) = nil
+      def pause(_name) = nil
+      def resume(_name) = nil
+      def pauseorresume(_name) = nil
+      def reload(_name) = nil
+    end
+
     # Routes a Genie `#command` (bar command) issued from a script (`put #...`) or
     # nested as a value/branch of another command. Clean-room port of the relevant
     # half of Genie4 Core/Command.cs `ParseCommand`.
@@ -31,13 +43,19 @@ module Lich
       # @param send [#call] game-command sink (applies pacing / loop guard)
       # @param hooks [#emit, nil] front-end effect sink
       # @param mover [#call, nil] callable(room_arg) that walks to a room (#goto)
-      def initialize(vars:, eval:, echo:, send:, hooks:, mover: nil)
+      # @param script_control [#names, #abort, #pause, #resume, #pauseorresume,
+      #   #reload, nil] host script-registry port for `#script` (defaults to a no-op)
+      # @param script_name [String, nil] name of the script issuing commands, so
+      #   `#script abort all` can abort the caller LAST (see {#apply_script_action})
+      def initialize(vars:, eval:, echo:, send:, hooks:, mover: nil, script_control: nil, script_name: nil)
         @vars = vars
         @eval = eval
         @echo = echo
         @send = send
         @hooks = hooks
         @mover = mover || ->(_room) {}
+        @script_control = script_control || NullScriptControl.new
+        @script_name = script_name
       end
 
       # Route a top-level `#command` (leading '#'); a non-empty result is sent to the
@@ -88,8 +106,74 @@ module Lich
         when 'if' then do_if(args)
         when 'send' then send_to_game(argument)
         when 'goto' then goto_room(argument)
+        when 'script' then do_script(args, argument)
         when 'mapper', 'automapper' then '' # reset/etc: no-op (we route movement via go2/DRC)
         else dispatch_fe(keyword, args, argument)
+        end
+      end
+
+      # --- engine-side: #script host control -------------------------------
+
+      # Genie lifecycle subcommands routed to the host script registry (the injected
+      # script-control port). Informational subcommands (list/vars/trace/debug/
+      # explorer/default) stay front-end effects via emit_generic.
+      LIFECYCLE_SCRIPT_ACTIONS = {
+        'abort' => :abort, 'pause' => :pause, 'resume' => :resume,
+        'pauseorresume' => :pauseorresume, 'reload' => :reload
+      }.freeze
+
+      # #script {abort|pause|resume|pauseorresume|reload} [all [except <name>] | <name>]
+      # (Command.cs:2188 -> FormMain.Command_ScriptAbort/Pause/Resume). Before this,
+      # `#script ...` fell through to a <genieHook> tag nothing consumes, so aborts were
+      # silent no-ops -- which broke the combat suite's sh.cmd/sk.cmd (`#script abort all`
+      # / `#script abort all except <name>`). The name/"all"/"except" resolution mirrors
+      # FormMain exactly; the actual kill/pause/unpause is the host port's job.
+      def do_script(args, argument)
+        return emit_generic('script', args, argument) if args.length < 2
+
+        action = LIFECYCLE_SCRIPT_ACTIONS[args[1].to_s.downcase]
+        return emit_generic('script', args, argument) if action.nil?
+
+        apply_script_action(action, args[2..].join(' '))
+      end
+
+      def apply_script_action(action, spec)
+        target, except = parse_script_spec(spec)
+        names = matching_scripts(target, except)
+        # Genie aborts every match INCLUDING the caller (FormMain iterates the whole
+        # list). In Lich a self-kill terminates this thread immediately (kill is not
+        # cooperative), which would strand the rest of an "abort all" -- so abort the
+        # issuing script LAST, after every other match has already been killed.
+        if action == :abort && @script_name && names.include?(@script_name)
+          names = names.reject { |n| n == @script_name } << @script_name
+        end
+        names.each { |name| @script_control.public_send(action, name) }
+        ''
+      end
+
+      # Port of FormMain's "all"/"except"/exact-name resolution (Command_ScriptAbort):
+      # split off `except <name>`, then an "all " prefix (or an empty spec) means "all
+      # scripts" (target ""), otherwise the trimmed spec is an exact script name.
+      # Returns [target, except]. NOTE: `except` is trimmed here (Genie left it raw);
+      # our args arrive as clean single-space-joined tokens, so trimming only guards
+      # against an accidental trailing space stranding the script meant to survive.
+      def parse_script_spec(spec)
+        text = spec.to_s
+        except = ''
+        idx = text.downcase.index('except ')
+        if idx&.positive?
+          except = text[(idx + 7)..].to_s.strip
+          text = text[0...idx].rstrip
+        end
+        target = "#{text} ".downcase.start_with?('all ') ? '' : text.strip
+        [target, except]
+      end
+
+      # Names of running host scripts to act on: empty target => all; a set except
+      # name is always spared. Exact-name match (case-sensitive), like Genie.
+      def matching_scripts(target, except)
+        @script_control.names.map(&:to_s).reject(&:empty?).select do |name|
+          (target.empty? || name == target) && (except.empty? || name != except)
         end
       end
 

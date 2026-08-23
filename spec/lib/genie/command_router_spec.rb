@@ -243,4 +243,117 @@ RSpec.describe Lich::Genie::CommandRouter do
       expect(hooks).to eq([['frobnicate', { 'args' => %w[a b], 'raw' => '{a} {b}' }]])
     end
   end
+
+  describe '#script host control' do
+    let(:calls) { [] }
+    let(:running) { %w[sc chl cl] }
+    let(:fake_control) do
+      log = calls
+      names = running
+      Object.new.tap do |o|
+        o.define_singleton_method(:names) { names }
+        %i[abort pause resume pauseorresume reload].each do |action|
+          o.define_singleton_method(action) { |name| log << [action, name] }
+        end
+      end
+    end
+    # A router that knows its own script name ('sc') so we can assert self-abort order.
+    let(:controlled_router) do
+      described_class.new(
+        vars: vars, eval: evaluator, hooks: hook_sink,
+        echo: ->(t) { echoes << t }, send: ->(t) { sends << t },
+        script_control: fake_control, script_name: 'sc'
+      )
+    end
+
+    it 'aborts every running script on #script abort all' do
+      controlled_router.route('#script abort all')
+      expect(calls).to contain_exactly([:abort, 'chl'], [:abort, 'cl'], [:abort, 'sc'])
+    end
+
+    it 'aborts the issuing script LAST so it cannot strand an abort all' do
+      controlled_router.route('#script abort all')
+      expect(calls.last).to eq([:abort, 'sc'])
+    end
+
+    it 'spares the named script on #script abort all except <name>' do
+      controlled_router.route('#script abort all except sc')
+      expect(calls).to contain_exactly([:abort, 'chl'], [:abort, 'cl'])
+    end
+
+    it 'aborts only the named script on #script abort <name>' do
+      controlled_router.route('#script abort chl')
+      expect(calls).to eq([[:abort, 'chl']])
+    end
+
+    it 'pauses every running script on #script pause all' do
+      controlled_router.route('#script pause all')
+      expect(calls).to contain_exactly([:pause, 'sc'], [:pause, 'chl'], [:pause, 'cl'])
+    end
+
+    it 'resumes only the named script on #script resume <name>' do
+      controlled_router.route('#script resume cl')
+      expect(calls).to eq([[:resume, 'cl']])
+    end
+
+    it 'reloads only the named script on #script reload <name>' do
+      controlled_router.route('#script reload chl')
+      expect(calls).to eq([[:reload, 'chl']])
+    end
+
+    it 'never sends a #script command to the game' do
+      controlled_router.route('#script abort all')
+      expect(sends).to be_empty
+    end
+
+    it 'ignores a name that is not currently running' do
+      controlled_router.route('#script abort nonexistent')
+      expect(calls).to be_empty
+    end
+
+    it 'routes an informational subcommand (list) to a front-end tag, not the port' do
+      controlled_router.route('#script list')
+      expect(hooks).to eq([['script', { 'args' => ['list'], 'raw' => 'list' }]])
+      expect(calls).to be_empty
+    end
+
+    it 'treats a bare #script as a front-end effect, not a mass abort' do
+      controlled_router.route('#script')
+      expect(calls).to be_empty
+    end
+
+    # Faithful-but-dangerous: Genie's Command_ScriptAbort gets "" for the arg, whose
+    # (+" ") form does NOT start with "all " but IS length 0, so it matches ALL. Lock
+    # this in so a future refactor can't quietly turn `#script abort` into a no-op.
+    it 'aborts ALL scripts on a bare "#script abort" (empty arg), matching Genie' do
+      controlled_router.route('#script abort')
+      expect(calls.map(&:last)).to contain_exactly('chl', 'cl', 'sc')
+      expect(calls.last).to eq([:abort, 'sc']) # caller still aborted last
+    end
+
+    it 'never aborts the caller when it is the excepted script' do
+      controlled_router.route('#script abort all except sc')
+      expect(calls.map(&:last)).not_to include('sc')
+      expect(calls).to contain_exactly([:abort, 'chl'], [:abort, 'cl'])
+    end
+
+    it 'matches the subcommand keyword case-insensitively' do
+      controlled_router.route('#script ABORT ALL EXCEPT sc')
+      expect(calls).to contain_exactly([:abort, 'chl'], [:abort, 'cl'])
+    end
+
+    it 'spares an except name even if it is not currently running (no-op except)' do
+      controlled_router.route('#script abort all except ghost')
+      expect(calls).to contain_exactly([:abort, 'sc'], [:abort, 'chl'], [:abort, 'cl'])
+    end
+
+    it 'does not reorder the caller for a non-abort action (pause leaves it in place)' do
+      controlled_router.route('#script pause all')
+      expect(calls.first).to eq([:pause, 'sc']) # port enumeration order preserved
+    end
+
+    it 'makes #script a safe no-op when no host port is wired (default)' do
+      expect { router.route('#script abort all') }.not_to raise_error
+    end
+  end
 end

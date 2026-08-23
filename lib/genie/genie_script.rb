@@ -85,6 +85,7 @@ module Lich
           hooks: LichHookSink.new,
           launch: ->(name, args) { launch_script(name, args) },
           mover: ->(room) { genie_goto(room) },
+          script_control: LichScriptControl.new,
           clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }
         )
         interpreter.run
@@ -176,6 +177,7 @@ module Lich
               game: LichGamePort.new,
               launch: ->(name, args) { Lich::Common::Script.start(name, args) },
               hooks: LichHookSink.new, echo: ->(text) { respond(text) },
+              script_control: LichScriptControl.new,
               mover: ->(room) { genie_walk(room) } # triggers walk but don't matchwait, so no ARRIVED inject
             )
           end
@@ -257,6 +259,73 @@ module Lich
       rescue StandardError => e
         respond "--- Lich: error reading script file (#{file_name}): #{e}"
         []
+      end
+    end
+
+    # Host script-control port backing `#script abort/pause/resume/pauseorresume/reload`.
+    #
+    # SCOPED TO GENIE (.cmd) SCRIPTS ON PURPOSE: `#script abort all` enumerates only
+    # running GenieScript instances, so it can never take down core Lich daemons
+    # (the mapper, infomon, the command broker, unrelated .lic scripts) the way a
+    # literal Genie "abort all" would. Genie itself had no such daemons to protect;
+    # in Lich, un-scoped mass kills would be catastrophic. Named actions resolve
+    # among genie scripts too (exact name, then case-insensitive, like Script.kill).
+    #
+    # The CommandRouter does the Genie name/"all"/"except" matching and hands us clean
+    # script names; we only enumerate and act.
+    class LichScriptControl
+      # @return [Array<String>] names of running genie (.cmd) scripts
+      def names
+        genie_scripts.map(&:name)
+      end
+
+      def abort(name)
+        script = find(name)
+        return unless script
+
+        script.killed_externally = true if script.respond_to?(:killed_externally=)
+        script.kill
+      end
+
+      def pause(name)
+        script = find(name)
+        script.pause if script && !script.paused?
+      end
+
+      def resume(name)
+        script = find(name)
+        script.unpause if script&.paused?
+      end
+
+      def pauseorresume(name)
+        script = find(name)
+        return unless script
+
+        script.paused? ? script.unpause : script.pause
+      end
+
+      # Genie `#script reload`: restart a genie script fresh. Kill it, then relaunch by
+      # name so the file is re-read (best effort; original CLI args are not preserved).
+      def reload(name)
+        script = find(name)
+        return unless script
+
+        script.kill
+        Lich::Common::Script.start(name)
+      end
+
+      private
+
+      def genie_scripts
+        Lich::Common::Script.running.select { |script| script.is_a?(GenieScript) }
+      rescue StandardError
+        []
+      end
+
+      def find(name)
+        scripts = genie_scripts
+        scripts.find { |script| script.name == name } ||
+          scripts.find { |script| script.name.to_s.casecmp?(name.to_s) }
       end
     end
 
