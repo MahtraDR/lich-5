@@ -692,6 +692,28 @@ Run `;main` and it will use the routines from `helper.cmd`. Put included files i
 folder (a `scripts/custom` folder is also searched). If you leave off the extension
 (`include helper`), the engine will look for `helper.cmd` automatically.
 
+### The `js_arrays` array library (`js` / `jscall`)
+
+Genie has no built-in array type, so the community `js_arrays.js` library is widely used to store
+arrays as `|`-separated lists in a variable and manipulate them. The engine implements this library
+**natively** — you don't need a JavaScript engine, and any `include js_arrays.js` line is simply
+ignored (harmless). Just call the functions as usual:
+
+```
+setvariable sizes tiny|small|medium|large
+setvariable volumes 1|2|4|8
+js doPush("sizes", "huge")            # sizes is now tiny|small|medium|large|huge
+jscall vol doXCompare("sizes", "volumes", "medium")   # %vol = 4
+```
+
+- `js FUNC(...)` runs a function for its effect (it changes the named array in place).
+- `jscall VAR FUNC(...)` runs a function and stores its return value in `%VAR`.
+
+Supported: `doPush`, `doPop`, `doShift`, `doUnshift`, `doInsert`, `doRemove`, `doReplace`,
+`doConcat`, `doSort`, `findIndex`, `checkExists`, `doXCompare`, `findMax`/`findMin`
+(`…Index`/`…Global` variants), `zipArrays`, `buildArray`, `buildArrayStr`. If you call a JS
+function the engine doesn't know, it tells you in the window rather than failing silently.
+
 ---
 
 ## 13. Reserved variables reference

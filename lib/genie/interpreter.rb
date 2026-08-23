@@ -69,6 +69,7 @@ module Lich
           echo: ->(text) { echo_line(text) },
           send: ->(text) { send_text(text) }
         )
+        @js_arrays = JsArrays.new(@vars)
         @state = :running
         @match_list = []
         @actions = []
@@ -213,7 +214,10 @@ module Lich
         when :else_func then do_else(instruction)
         when :action then do_action(Text.argument_string(instruction.content))
         when :timer then do_timer(Text.argument_string(instruction.content))
-        when :js, :jscall, :plugin, :pluginscript, :debuglevel then nil # stubbed for prototype
+        when :js then run_js(arg)
+        when :jscall then run_jscall(arg)
+        when :plugin, :pluginscript then announce_unsupported('#plugin/#pluginscript', arg)
+        when :debuglevel then nil # no-op (debug verbosity has no meaning in Lich)
         end
 
         index
@@ -588,6 +592,8 @@ module Lich
           when 'echo' then echo_line(argument)
           when 'put', 'send' then send_text(substitute(argument))
           when 'setvariable', 'var' then local_set(Text.keyword_string(argument), Text.argument_string(argument))
+          when 'js' then run_js(substitute(argument))
+          when 'jscall' then run_jscall(substitute(argument))
           else send_text(substitute(command))
           end
         end
@@ -611,6 +617,59 @@ module Lich
         when 'start', 'setstart', '' then @timer_start = now
         when 'stop', 'clear' then @timer_start = nil
         end
+      end
+
+      # --- js_arrays bridge (the only JS used across the corpus) --------------
+
+      # `js FUNC(args)`: run a js_arrays op for its side effect (array mutation).
+      # @param call_text [String] the substituted text after the `js` verb
+      def run_js(call_text)
+        parsed = parse_js_call(call_text)
+        return announce_unsupported('#js', call_text) if parsed.nil?
+
+        announce_unsupported('#js', call_text) if @js_arrays.call(*parsed) == :unknown
+      end
+
+      # `jscall VAR FUNC(args)`: run a js_arrays op and store its return in local VAR.
+      # @param call_text [String] the substituted text after the `jscall` verb
+      def run_jscall(call_text)
+        target = Text.keyword_string(call_text)
+        parsed = parse_js_call(Text.argument_string(call_text))
+        return announce_unsupported('#jscall', call_text) if parsed.nil? || target.empty?
+
+        result = @js_arrays.call(*parsed)
+        return announce_unsupported('#jscall', call_text) if result == :unknown
+
+        local_set(target, result.to_s)
+      end
+
+      # Parse a `FUNC(arg, arg, ...)` js call. @return [[String, Array<String>], nil]
+      def parse_js_call(text)
+        match = text.to_s.strip.match(/\A([A-Za-z_]\w*)\s*\((.*)\)\s*\z/m)
+        return nil if match.nil?
+
+        [match[1], split_js_args(match[2])]
+      end
+
+      # Split a js arg list on top-level commas, honoring double-quotes, and strip the
+      # surrounding quotes (js_arrays args are quoted strings or bare numbers).
+      def split_js_args(raw)
+        return [] if raw.strip.empty?
+
+        args = []
+        buffer = +''
+        quoted = false
+        raw.each_char do |char|
+          if char == '"' then quoted = !quoted
+          elsif char == ',' && !quoted then (args << buffer.strip) && (buffer = +'')
+          else buffer << char
+          end
+        end
+        args << buffer.strip
+      end
+
+      def announce_unsupported(verb, detail)
+        echo_line("[Genie: #{verb} not supported in the in-Lich engine: #{detail.to_s.strip}]")
       end
 
       # --- helpers ----------------------------------------------------------

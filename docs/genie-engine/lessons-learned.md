@@ -296,6 +296,26 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   var/path, not the engine. Method: build a timeline from the trace log (who launched/exited,
   every command issued), grep the .cmd sources for each variable's readers AND writers, and
   only after the script logic fully explains the observation do you suspect the engine.
+- **`js`/`jscall` = reimplement the ONE community library natively, don't embed a JS engine
+  (v0.9.2).** Corpus audit: the only JavaScript used anywhere (Tirost/Mastercraft/ubercombat =
+  zero; public repo DR-Genie-Scripts = 9 files) is a single shared library `js_arrays.js` that
+  gives Genie the array type it lacks -- every user copies it verbatim. So `lib/genie/js_arrays.rb`
+  is a Ruby port of its ~two dozen ops (doPush/Pop/Shift/Unshift/Insert/Remove/Replace/Concat/
+  Sort, findIndex/checkExists/doXCompare, find(Max|Min)(|Index|Global), zipArrays, buildArray[Str]).
+  Wiring: arrays are `|`-delimited strings in LOCAL vars (getVar/setVar == local_get/local_set);
+  `js FUNC(args)` mutates in place, `jscall VAR FUNC(args)` stores the return in local VAR. Handled
+  in `run_script_row` AND `execute_action` (action bodies). KEY: the lexer ALREADY skips
+  `include *.js` (it's the JS source we replaced -- `handle_include` returns on `.js`), so a script's
+  `include js_arrays.js` is a clean no-op and the verbs route to our shim (verified: real
+  Miner/mining.cmd + mm_train.cmd compile 0-warning and their `jscall doXCompare(...)` runs, dotted
+  target var `this.volume` included). Two deliberate divergences from the JS: (1) `%name`/`$name`
+  args are already resolved by our substitution pass, so we do NOT re-resolve (the JS's getVar/
+  getGlobal on args is redundant here); (2) the JS's numeric find(Max|Min) use a buggy string
+  compare (findMinIndex even returns the value) -- unused by any real script, so we implement the
+  documented NUMERIC intent. Unknown js funcs + `#plugin`/`#pluginscript` now ANNOUNCE (echo a
+  `[Genie: ... not supported ...]`) instead of silently no-op'ing. STILL a gap: class-scoped
+  actions (`action (class) js ...`) are deferred by `do_action`, so mm_train's `js doPush` inside
+  `action (pouchcheck)` never registers -- separate roadmap item (action/gag/sub class-gating).
 
 ## DR game-state (the big surprises)
 - **`XMLData` is shared GS/DR.** DR-specific state lives in DR modules.
