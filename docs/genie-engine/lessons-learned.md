@@ -280,6 +280,22 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   the thread), so aborting self mid-iteration would strand the rest of an "abort all" -- so the router
   moves `@script_name` to the end of the abort list. Diagnose live: `,e echo
   Lich::Common::Script.running.select { |s| s.is_a?(Lich::Genie::GenieScript) }.map(&:name)`.
+- **A "the engine picks the wrong spell" report was NOT an engine bug -- reconstruct the full
+  script control-flow + live game-state before touching the engine.** Report: `,cl` (queue
+  Chain Lightning) never switched sc.cmd off Lightning Bolt. The engine was exonerated
+  end-to-end: the queueing script and sc share the one in-process GlobalStore (no per-instance
+  cache), the spellcast reset trigger's deeply-nested 34-`;` `#if {($pf=0)} {...#var rspell 0;
+  #var rspellname 0...}` clears BOTH vars (verified headless -> R4 run_branch is correct for
+  arbitrarily nested branches), and nothing in the whole suite ever sets `autolb 1`, so the
+  flag cascade could not have chosen LB. Real cause: a GAME-STATE var, `pvpjustice = 1` (a
+  justice/law-enforcement zone) set the whole session, and sc's own adaptive-TM logic
+  deliberately routes AoE spells (Chain Lightning) to single-target Lightning Bolt via its
+  AdaptiveLB path -- identical in native Genie. TELL: the losing branch is reachable ONLY via a
+  specific game-state flag; grep the suite for every WRITER of the "expected" var -- if nothing
+  sets the value that would produce the observed command, the decision comes from a DIFFERENT
+  var/path, not the engine. Method: build a timeline from the trace log (who launched/exited,
+  every command issued), grep the .cmd sources for each variable's readers AND writers, and
+  only after the script logic fully explains the observation do you suspect the engine.
 
 ## DR game-state (the big surprises)
 - **`XMLData` is shared GS/DR.** DR-specific state lives in DR modules.
