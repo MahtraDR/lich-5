@@ -127,6 +127,23 @@ RSpec.describe Lich::Common::Inventory do
       expect(described_class[eddy_id].used_lbs).to eq(0)
     end
 
+    it 'counts items nested inside child containers in used_lbs (no in_encum)' do
+      # outer (no in_encum) holds a 3 lb sack that itself holds a 5 lb stone.
+      # used_lbs must be the sack's effective total (3 + 5 = 8), not just its
+      # intrinsic 3 -- otherwise space_left overstates free capacity.
+      described_class.reset!
+      described_class.observe(
+        "<inventoryManager id='iw' room='1'>" \
+        "<i id='90000' loc='worn,player' name=\"a,canvas,pack\" weight='2' in_max='1000'/>" \
+        "<i id='90001' loc='in,90000' name=\"a,cloth,sack\" weight='3' in_max='500'/>" \
+        "<i id='90002' loc='in,90001' name=\"a,granite,stone\" weight='5'/>" \
+        "</inventoryManager>"
+      )
+      outer = described_class['90000']
+      expect(outer.used_lbs).to eq(8)
+      expect(outer.space_left).to eq(100 - 8)
+    end
+
     it 'computes space_left from capacity and used weight' do
       expect(described_class[lootpouch_id].space_left).to eq(170 - 84)
     end
@@ -435,20 +452,26 @@ RSpec.describe Lich::Common::Inventory do
       expect(game_obj.inv.map(&:id)).to include('70001')
     end
 
-    it 'sets the hand slots via GameObj.right_hand / left_hand' do
-      expect(game_obj.right_hand.id).to eq('70003')
-      expect(game_obj.left_hand.id).to eq('70004')
+    it 'does NOT mirror hands into GameObj (classic <right>/<left> owns them)' do
+      expect(game_obj.right_hand).to be_nil
+      expect(game_obj.left_hand).to be_nil
     end
 
-    it 'places off-character room-floor items in GameObj.loot' do
-      expect(game_obj.loot.map(&:id)).to include('70005')
-    end
-
-    it 'does not put on-character at-feet items in GameObj.loot' do
-      # atfeet is at the player's own feet, not off-character room loot, so it is
-      # kept out of @@loot -- surfaced only via Inventory#at_feet.
-      expect(game_obj.loot.to_a.map(&:id)).not_to include('70006')
+    it 'does NOT mirror room or at-feet items into GameObj.loot (classic room-objs owns it)' do
+      # Both hands are dropped and loot is left to the classic room-objs stream;
+      # room/at-feet items surface only via Inventory's own accessors.
+      expect(game_obj.loot.to_a.map(&:id)).not_to include('70005', '70006')
+      expect(described_class.room.map(&:id)).to eq(['70005'])
       expect(described_class.at_feet.map(&:id)).to eq(['70006'])
+    end
+
+    it 'still classifies a non-mirrored item via its pooled identity GameObj' do
+      # Hands/room are not placed in a live registry, but are pooled via
+      # index_or_create so the item still resolves and type/sellable still work
+      # without raising.
+      rapier = described_class['70003']
+      expect(rapier.noun).to eq('rapier')
+      expect { rapier.type }.not_to raise_error
     end
 
     it 'does not duplicate a worn item the classic stream already registered' do
@@ -460,6 +483,162 @@ RSpec.describe Lich::Common::Inventory do
         "</inventoryManager>"
       )
       expect(game_obj.inv.count { |o| o.id == '80001' }).to eq(1)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # GameObj reconciliation (Option A): each snapshot ATOMICALLY wholesale-replaces
+  # the two feed-owned registries (@@inv via begin_inv/commit_inv, each non-opaque
+  # container via begin_container/commit_container), so moves/removals vanish after
+  # the swap; opaque containers are preserved; vanished containers are deleted; and
+  # an in-flight classic refresh for the same target is never truncated.
+  # ---------------------------------------------------------------------------
+  describe 'GameObj reconciliation across snapshots' do
+    let(:game_obj) { Lich::Common::GameObj }
+
+    def first_snapshot
+      described_class.observe(
+        "<inventoryManager id='s1' room='1'>" \
+        "<i id='ca' loc='worn,player' name=\"a,leather,pack\" weight='10' in_max='1000'/>" \
+        "<i id='cb' loc='worn,player' name=\"a,canvas,sack\" weight='8' in_max='1000'/>" \
+        "<i id='x' loc='in,ca' name=\"a,steel,dagger\" weight='5'/>" \
+        "<i id='w' loc='worn,player' name=\"a,silk,cloak\" weight='3' in_max='500'/>" \
+        "</inventoryManager>"
+      )
+    end
+
+    it 'moves an item to its new container and drops it from the old one' do
+      first_snapshot
+      expect(game_obj.containers['ca'].map(&:id)).to eq(['x'])
+
+      # Second snapshot: 'x' has moved from container ca to container cb.
+      described_class.observe(
+        "<inventoryManager id='s2' room='1'>" \
+        "<i id='ca' loc='worn,player' name=\"a,leather,pack\" weight='10' in_max='1000'/>" \
+        "<i id='cb' loc='worn,player' name=\"a,canvas,sack\" weight='8' in_max='1000'/>" \
+        "<i id='x' loc='in,cb' name=\"a,steel,dagger\" weight='5'/>" \
+        "</inventoryManager>"
+      )
+      expect(game_obj.containers['ca'].map(&:id)).to eq([])
+      expect(game_obj.containers['cb'].map(&:id)).to eq(['x'])
+    end
+
+    it 'drops a worn item the new snapshot no longer reports' do
+      first_snapshot
+      expect(game_obj.inv.map(&:id)).to include('w')
+
+      described_class.observe(
+        "<inventoryManager id='s2' room='1'>" \
+        "<i id='ca' loc='worn,player' name=\"a,leather,pack\" weight='10' in_max='1000'/>" \
+        "</inventoryManager>"
+      )
+      expect(game_obj.inv.map(&:id)).not_to include('w')
+    end
+
+    it 'wholesale-replaces @@inv from the feed (drops a classic worn entry the feed omits)' do
+      # Under A the extended feed is authoritative for the complete worn set, so a
+      # classic @@inv entry the feed does not report is evicted by the swap.
+      first_snapshot
+      game_obj.new_inv('classic-worn', 'ring', 'a plain ring')
+      expect(game_obj.inv.map(&:id)).to include('classic-worn')
+
+      described_class.observe(
+        "<inventoryManager id='s2' room='1'>" \
+        "<i id='ca' loc='worn,player' name=\"a,leather,pack\" weight='10' in_max='1000'/>" \
+        "</inventoryManager>"
+      )
+      expect(game_obj.inv.map(&:id)).to eq(['ca'])
+    end
+
+    it 'preserves a container that turned opaque (locked) rather than emptying it' do
+      described_class.observe(
+        "<inventoryManager id='s1' room='1'>" \
+        "<i id='lk' loc='worn,player' name=\"a,steel,coffer\" weight='5' in_max='400'/>" \
+        "<i id='y' loc='in,lk' name=\"a,gold,coin\" weight='1'/>" \
+        "</inventoryManager>"
+      )
+      expect(game_obj.containers['lk'].map(&:id)).to eq(['y'])
+
+      # Now lk is locked -> opaque, reports zero children. Its last-known contents
+      # must survive (not be wholesale-replaced with []).
+      described_class.observe(
+        "<inventoryManager id='s2' room='1'>" \
+        "<i id='lk' loc='worn,player' name=\"a,steel,coffer\" weight='5' in_max='400' flags='closed,locked'/>" \
+        "</inventoryManager>"
+      )
+      expect(game_obj.containers['lk'].map(&:id)).to eq(['y'])
+    end
+
+    it 'deletes a container that vanished from the tree entirely' do
+      first_snapshot
+      expect(game_obj.containers).to have_key('ca')
+
+      # ca is gone from this snapshot (traded away / destroyed).
+      described_class.observe(
+        "<inventoryManager id='s2' room='1'>" \
+        "<i id='cb' loc='worn,player' name=\"a,canvas,sack\" weight='8' in_max='1000'/>" \
+        "</inventoryManager>"
+      )
+      expect(game_obj.containers).not_to have_key('ca')
+    end
+
+    it 'skips its @@inv replace while a classic inv refresh is open (no truncation)' do
+      game_obj.begin_inv
+      game_obj.new_inv('classic-staged', 'ring', 'a ring') # into @@staging_inv
+
+      described_class.observe(
+        "<inventoryManager id='s1' room='1'>" \
+        "<i id='ca' loc='worn,player' name=\"a,leather,pack\" weight='10' in_max='1000'/>" \
+        "</inventoryManager>"
+      )
+      # Inventory must NOT have committed/stomped the classic staging.
+      expect(game_obj.inv_refresh_open?).to be(true)
+      game_obj.commit_inv
+      expect(game_obj.inv.map(&:id)).to eq(['classic-staged'])
+    end
+
+    it 'skips a container whose classic refresh is open (no truncation)' do
+      game_obj.begin_container('cc')
+      game_obj.new_inv('classic-child', 'gem', 'a gem', 'cc') # into @@staging_contents['cc']
+
+      described_class.observe(
+        "<inventoryManager id='s1' room='1'>" \
+        "<i id='cc' loc='worn,player' name=\"a,mesh,pouch\" weight='2' in_max='300'/>" \
+        "<i id='x2' loc='in,cc' name=\"a,steel,dagger\" weight='5'/>" \
+        "</inventoryManager>"
+      )
+      # Inventory must NOT have committed/stomped the classic container staging.
+      expect(game_obj.container_refresh_open?('cc')).to be(true)
+      game_obj.commit_container('cc')
+      expect(game_obj.containers['cc'].map(&:id)).to eq(['classic-child'])
+    end
+
+    it 'drops owned containers on reset!' do
+      first_snapshot
+      expect(game_obj.containers).to have_key('ca')
+
+      described_class.reset!
+
+      expect(game_obj.containers).not_to have_key('ca')
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Snapshot immutability contract
+  # ---------------------------------------------------------------------------
+  describe 'published snapshot immutability' do
+    before { described_class.observe(full_capture) }
+
+    it 'freezes an item flags array so a consumer cannot mutate shared state' do
+      trunk = described_class[trunk_id]
+      expect(trunk.flags).to be_frozen
+      expect { trunk.flags << 'tampered' }.to raise_error(FrozenError)
+    end
+
+    it 'freezes item identity strings' do
+      pack = described_class[lootpouch_id]
+      expect(pack.noun).to be_frozen
+      expect(pack.name).to be_frozen
     end
   end
 
@@ -635,6 +814,208 @@ RSpec.describe Lich::Common::Inventory do
       described_class.refresh(timeout: 0.1)
 
       expect(described_class.feed_available?).to be(true)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # refresh continuation/pagination assembly (matches the official Saga client:
+  # an initial response announces <continuation> branches, each fetched with
+  # `_inventory manager {id} continue {room} {root} {last}` and folded into one
+  # snapshot).
+  # ---------------------------------------------------------------------------
+  describe '.refresh continuation assembly' do
+    let(:game_obj) { Lich::Common::GameObj }
+
+    # Initial response: top-level container 'ca' plus a continuation marker for
+    # its contents. `branches` lets a test announce several at once; `child_of`
+    # supplies the item(s) each continuation returns.
+    def stub_server(initial_items:, initial_conts:, on_continue:)
+      allow(Game).to receive(:_puts) do |cmd|
+        if (m = cmd.match(/\A_inventory manager (\S+) continue (\S+) (\S+) (\S+)\z/))
+          id, room, root, last = m.captures
+          described_class.observe(on_continue.call(id, room, root, last))
+        elsif (m = cmd.match(/\A_inventory manager (\S+)\z/))
+          id = m[1]
+          described_class.observe(
+            "<inventoryManager id='#{id}' room='1'>#{initial_items}#{initial_conts}</inventoryManager>"
+          )
+        end
+      end
+    end
+
+    it 'folds an initial response and its continuation branch into one snapshot' do
+      stub_server(
+        initial_items: "<i id='ca' loc='worn,player' name=\"a,leather,pack\" weight='10' in_max='1000'/>",
+        initial_conts: "<continuation root='R1' last='L1'/>",
+        on_continue: lambda { |id, room, root, last|
+          "<inventoryManager id='#{id}' room='#{room}' root='#{root}' after='#{last}'>" \
+          "<i id='x' loc='in,ca' name=\"a,steel,dagger\" weight='5'/>" \
+          "</inventoryManager>"
+        }
+      )
+      snap = described_class.refresh(timeout: 2)
+      expect(snap.all.map(&:id)).to contain_exactly('ca', 'x')
+      expect(snap['ca'].contents.map(&:id)).to eq(['x'])
+    end
+
+    it 'fetches every branch announced at once' do
+      stub_server(
+        initial_items: "<i id='ca' loc='worn,player' name=\"a,leather,pack\" weight='1' in_max='1000'/>",
+        initial_conts: (1..3).map { |n| "<continuation root='R#{n}' last='L#{n}'/>" }.join,
+        on_continue: lambda { |id, room, root, last|
+          n = root[/\d+/]
+          "<inventoryManager id='#{id}' room='#{room}' root='#{root}' after='#{last}'>" \
+          "<i id='item#{n}' loc='in,ca' name=\"a,,thing#{n}\" weight='1'/>" \
+          "</inventoryManager>"
+        }
+      )
+      snap = described_class.refresh(timeout: 2)
+      expect(snap['ca'].contents.map(&:id)).to contain_exactly('item1', 'item2', 'item3')
+    end
+
+    it 'follows a continuation announced by a continuation (nested branches)' do
+      stub_server(
+        initial_items: "<i id='ca' loc='worn,player' name=\"a,leather,pack\" weight='1' in_max='1000'/>",
+        initial_conts: "<continuation root='R1' last='L1'/>",
+        on_continue: lambda { |id, room, root, last|
+          if root == 'R1'
+            # first branch adds a sub-container and points at a deeper branch
+            "<inventoryManager id='#{id}' room='#{room}' root='#{root}' after='#{last}'>" \
+            "<i id='sub' loc='in,ca' name=\"a,,sack\" weight='1' in_max='500'/>" \
+            "<continuation root='R2' last='L2'/>" \
+            "</inventoryManager>"
+          else
+            "<inventoryManager id='#{id}' room='#{room}' root='#{root}' after='#{last}'>" \
+            "<i id='deep' loc='in,sub' name=\"a,,gem\" weight='1'/>" \
+            "</inventoryManager>"
+          end
+        }
+      )
+      snap = described_class.refresh(timeout: 2)
+      expect(snap.all.map(&:id)).to contain_exactly('ca', 'sub', 'deep')
+      expect(snap['sub'].contents.map(&:id)).to eq(['deep'])
+    end
+
+    it 'mirrors an assembled paginated snapshot into GameObj' do
+      stub_server(
+        initial_items: "<i id='ca' loc='worn,player' name=\"a,leather,pack\" weight='10' in_max='1000'/>",
+        initial_conts: "<continuation root='R1' last='L1'/>",
+        on_continue: lambda { |id, room, root, last|
+          "<inventoryManager id='#{id}' room='#{room}' root='#{root}' after='#{last}'>" \
+          "<i id='x' loc='in,ca' name=\"a,steel,dagger\" weight='5'/>" \
+          "</inventoryManager>"
+        }
+      )
+      described_class.refresh(timeout: 2)
+      expect(game_obj.containers['ca'].map(&:id)).to eq(['x'])
+    end
+
+    it 'keeps at most MAX_CONCURRENT_CONTINUATIONS continuation requests in flight' do
+      sent = []
+      allow(Game).to receive(:_puts) do |cmd|
+        sent << cmd
+        next if cmd.include?('continue') # record continues but never answer them
+
+        id = cmd[/_inventory manager (\S+)/, 1]
+        branches = (1..6).map { |n| "<continuation root='R#{n}' last='L#{n}'/>" }.join
+        described_class.observe(
+          "<inventoryManager id='#{id}' room='1'>" \
+          "<i id='ca' loc='worn,player' name=\"a,,pack\" weight='1' in_max='100'/>#{branches}" \
+          "</inventoryManager>"
+        )
+      end
+      described_class.refresh(timeout: 0.2)
+      expect(sent.grep(/continue/).size).to eq(described_class::MAX_CONCURRENT_CONTINUATIONS)
+    end
+
+    it 'fails closed on a stale (interrupted) response' do
+      allow(Game).to receive(:_puts) do |cmd|
+        id = cmd[/_inventory manager (\S+)/, 1]
+        described_class.observe("<inventoryManager id='#{id}' room='1' state='stale'></inventoryManager>")
+      end
+      expect(described_class.refresh(timeout: 1)).to be_nil
+    end
+
+    it 'fails closed when a continuation envelope does not match its request' do
+      stub_server(
+        initial_items: "<i id='ca' loc='worn,player' name=\"a,,pack\" weight='1' in_max='100'/>",
+        initial_conts: "<continuation root='R1' last='L1'/>",
+        on_continue: lambda { |id, room, root, _last|
+          # echo the wrong cursor
+          "<inventoryManager id='#{id}' room='#{room}' root='#{root}' after='WRONG'>" \
+          "<i id='x' loc='in,ca' name=\"a,,dagger\" weight='1'/>" \
+          "</inventoryManager>"
+        }
+      )
+      expect(described_class.refresh(timeout: 1)).to be_nil
+    end
+
+    it 'fails closed when the server repeats a continuation cursor' do
+      allow(Game).to receive(:_puts) do |cmd|
+        id = cmd[/_inventory manager (\S+)/, 1]
+        described_class.observe(
+          "<inventoryManager id='#{id}' room='1'>" \
+          "<i id='ca' loc='worn,player' name=\"a,,pack\" weight='1' in_max='100'/>" \
+          "<continuation root='R1' last='L1'/><continuation root='R1' last='L1'/>" \
+          "</inventoryManager>"
+        )
+      end
+      expect(described_class.refresh(timeout: 1)).to be_nil
+    end
+
+    it 'fails closed on a duplicate item id across parts' do
+      stub_server(
+        initial_items: "<i id='ca' loc='worn,player' name=\"a,,pack\" weight='1' in_max='100'/>",
+        initial_conts: "<continuation root='R1' last='L1'/>",
+        on_continue: lambda { |id, room, root, last|
+          "<inventoryManager id='#{id}' room='#{room}' root='#{root}' after='#{last}'>" \
+          "<i id='ca' loc='worn,player' name=\"a,,pack\" weight='1' in_max='100'/>" \
+          "</inventoryManager>"
+        }
+      )
+      expect(described_class.refresh(timeout: 1)).to be_nil
+    end
+
+    it 'fails closed when a continuation item precedes its parent' do
+      stub_server(
+        initial_items: "<i id='ca' loc='worn,player' name=\"a,,pack\" weight='1' in_max='100'/>",
+        initial_conts: "<continuation root='R1' last='L1'/>",
+        on_continue: lambda { |id, room, root, last|
+          "<inventoryManager id='#{id}' room='#{room}' root='#{root}' after='#{last}'>" \
+          "<i id='x' loc='in,unknownparent' name=\"a,,dagger\" weight='1'/>" \
+          "</inventoryManager>"
+        }
+      )
+      expect(described_class.refresh(timeout: 1)).to be_nil
+    end
+
+    it 'returns nil (never raises) if assembling a part blows up unexpectedly' do
+      allow(described_class).to receive(:build_item).and_raise(StandardError, 'boom')
+      allow(Game).to receive(:_puts) do |cmd|
+        id = cmd[/_inventory manager (\S+)/, 1]
+        described_class.observe(
+          "<inventoryManager id='#{id}' room='1'>" \
+          "<i id='ca' loc='worn,player' name=\"a,,pack\" weight='1' in_max='100'/>" \
+          "</inventoryManager>"
+        )
+      end
+      expect { @result = described_class.refresh(timeout: 1) }.not_to raise_error
+      expect(@result).to be_nil
+    end
+
+    it 'times out (nil) when an announced continuation never arrives' do
+      allow(Game).to receive(:_puts) do |cmd|
+        next if cmd.include?('continue') # never answer the continuation
+
+        id = cmd[/_inventory manager (\S+)/, 1]
+        described_class.observe(
+          "<inventoryManager id='#{id}' room='1'>" \
+          "<i id='ca' loc='worn,player' name=\"a,,pack\" weight='1' in_max='100'/>" \
+          "<continuation root='R1' last='L1'/>" \
+          "</inventoryManager>"
+        )
+      end
+      expect(described_class.refresh(timeout: 0.2)).to be_nil
     end
   end
 

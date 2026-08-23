@@ -8,12 +8,13 @@ module Lich
     # stream (confirmed live on both GemStone and DragonRealms).
     #
     # Where {GameObj} exposes only the containers the passive stream has already
-    # streamed (hands, worn, a pack you just opened), a single +inventoryManager+
-    # response returns the player's ENTIRE nested item tree at once -- every
-    # container's contents, each item's +weight+, container load (+in_encum+),
-    # and +closed+/+locked+ state -- none of which {GameObj} carries. That makes
-    # "find item X anywhere," "audit my whole inventory," and weight budgeting
-    # answerable in one request.
+    # streamed (hands, worn, a pack you just opened), an +inventoryManager+
+    # response returns the player's ENTIRE nested item tree -- every container's
+    # contents, each item's +weight+, container load (+in_encum+), and
+    # +closed+/+locked+ state -- none of which {GameObj} carries. That makes "find
+    # item X anywhere," "audit my whole inventory," and weight budgeting
+    # answerable from one snapshot. A large tree may arrive paginated across
+    # several responses ({.refresh} reassembles them transparently; see below).
     #
     # ## When to reach for this vs {GameObj}
     #
@@ -30,22 +31,35 @@ module Lich
     #
     # ## GameObj integration
     #
-    # Each observed snapshot is also mirrored into GameObj by exist id, keyed on
-    # the item's +loc+ relation, so GameObj-native queries reflect the whole tree:
+    # Each committed snapshot is mirrored into the two GameObj registries the
+    # extended feed authoritatively owns, keyed on the item's +loc+ relation:
     #
     # | +loc+ relation | GameObj home |
     # |----------------|--------------|
     # | +in,{id}+ / +on,{id}+ | +GameObj.contents[{id}]+ (even for unopened containers) |
     # | +worn,player+ | +GameObj.inv+ |
-    # | +righthand,player+ / +lefthand,player+ | +GameObj.right_hand+ / +GameObj.left_hand+ |
-    # | +room+ | +GameObj.loot+ (off-character room floor) |
-    # | +atfeet,player+ | identity only -- on-character, so not +@@loot+; see {.at_feet} |
+    # | +righthand,player+ / +lefthand,player+ | not mirrored -- classic +<right>+/+<left>+ owns them |
+    # | +room+ | not mirrored -- classic room-objs owns +GameObj.loot+ |
+    # | +atfeet,player+ | identity only; see {.at_feet} |
     #
-    # The classic +<inv>+/+<container>+ stream still owns these registries live;
-    # Inventory only fills the gaps (chiefly unopened-container contents) and its
-    # writes for fast-changing slots (hands, worn) are transient -- the classic
-    # stream's next update replaces them. So GameObj stays live-authoritative and
-    # gains the extended-feed tree for free.
+    # Hands and room loot are deliberately left to the classic stream, which is
+    # live and authoritative for those fast-changing slots (a +<right>+/+<left>+ tag
+    # accompanies every hand change; the room-objs stream owns the floor). Mirroring
+    # them would only add redundant, occasionally-stale writes. Every relation not
+    # mirrored into a registry is still pooled identity-only via
+    # {GameObj.index_or_create} so {Item#type}/{Item#sellable} classify correctly.
+    #
+    # Reconciliation is by ATOMIC wholesale replace, reusing the +begin_*+/+commit_*+
+    # staging swap from GameObj PRs #1370/#1497: worn items replace +@@inv+ via
+    # +begin_inv+/+commit_inv+, and each non-opaque container's contents replace
+    # +@@contents[id]+ via +begin_container+/+commit_container+ -- so a moved or
+    # removed item simply isn't re-registered and is gone after the swap. Locked
+    # (opaque) containers are skipped (they report zero children, so replacing would
+    # wipe last-known contents); a container that vanishes entirely is dropped with
+    # +delete_container+. If a classic staged refresh for the same target is already
+    # open, Inventory skips that target this cycle and self-heals on the next
+    # response, so it can never truncate an in-flight classic fill. All mirroring
+    # runs on the parser thread, keeping registry writes single-threaded.
     #
     # ## Threading
     #
@@ -56,6 +70,17 @@ module Lich
     # Never call {.refresh} from a Downstream/Upstream hook proc -- it blocks
     # waiting for {.observe} to run on the parser thread and would stall the client
     # pipeline.
+    #
+    # ## Pagination
+    #
+    # A large tree is split by the server: the initial response carries some items
+    # plus +<continuation>+ markers, and each branch is fetched with a follow-up
+    # +_inventory manager {id} continue {room} {root} {last}+ request (up to
+    # {MAX_CONCURRENT_CONTINUATIONS} in flight). {.refresh} drives this exchange on
+    # the caller thread and returns a single assembled snapshot. A PASSIVE
+    # paginated response seen by {.observe} is failed closed instead -- completing
+    # it would require sending upstream, which the observe tap must never do -- so
+    # prefer {.refresh} when a paginated inventory must be captured.
     #
     # @example Find an item anywhere and read its container's free weight
     #   snap = Inventory.refresh
@@ -80,6 +105,10 @@ module Lich
       # does not disable the feature.
       REFRESH_TIMEOUTS_BEFORE_ABSENT = 2
 
+      # Maximum continuation requests {.refresh} keeps in flight at once while
+      # assembling a paginated inventory, matching the official Saga client.
+      MAX_CONCURRENT_CONTINUATIONS = 4
+
       # First feed-absent re-probe delay, in seconds; doubles per miss up to
       # {PROBE_BACKOFF_MAX_SECONDS} so a permanently-absent feed is not re-probed
       # forever and never stalls a caller for the full timeout on every call.
@@ -91,12 +120,6 @@ module Lich
       # The five standard XML entities; the feed only escapes these (chiefly
       # +&quot;+ inside +long+ descriptions).
       XML_ENTITIES = { 'amp' => '&', 'lt' => '<', 'gt' => '>', 'quot' => '"', 'apos' => "'" }.freeze
-
-      # Sentinel pushed to a pending {.refresh} latch when a response for that id
-      # is incomplete (truncated/continuation), so the caller fails closed
-      # promptly instead of waiting out the full timeout.
-      FAILED = Object.new
-      private_constant :FAILED
 
       # A single item from an +inventoryManager+ response: one exist id, its
       # identity, physical data, container facets, and links into the tree.
@@ -173,19 +196,21 @@ module Lich
         # @param fields [Hash] pre-parsed, coerced attribute values
         # @api private
         def initialize(fields)
-          @id           = fields[:id]
-          @article      = fields[:article]
-          @adjective    = fields[:adjective]
-          @noun         = fields[:noun]
-          @name         = fields[:name]
-          @long         = fields[:long]
-          @relation     = fields[:relation]
-          @parent_id    = fields[:parent_id]
+          @id           = freeze_str(fields[:id])
+          @article      = freeze_str(fields[:article])
+          @adjective    = freeze_str(fields[:adjective])
+          @noun         = freeze_str(fields[:noun])
+          @name         = freeze_str(fields[:name])
+          @long         = freeze_str(fields[:long])
+          @relation     = freeze_str(fields[:relation])
+          @parent_id    = freeze_str(fields[:parent_id])
           @weight       = fields[:weight]
           @capacity_lbs = fields[:capacity_lbs]
           @in_encum     = fields[:in_encum]
-          @in_selector  = fields[:in_selector]
-          @flags        = fields[:flags]
+          @in_selector  = freeze_str(fields[:in_selector])
+          # Frozen (deeply) so a consumer cannot mutate shared snapshot state via
+          # e.g. +item.flags << "locked"+; the flag tokens are frozen too.
+          @flags        = fields[:flags].map(&:freeze).freeze
           @has_max      = fields[:has_max]
           @children     = []
         end
@@ -268,8 +293,10 @@ module Lich
 
         # Weight currently used by this container, in pounds: {#in_encum} when
         # the wire provides it (authoritative for magical containers), else the
-        # sum of direct children's intrinsic {#weight}. +nil+ for a non-container
-        # or an opaque (locked) container, where it is not meaningful.
+        # sum of each direct child's effective {#total_weight} -- so items nested
+        # inside child containers are counted too (a plain child contributes just
+        # its own {#weight}; a child eddy contributes only its own). +nil+ for a
+        # non-container or an opaque (locked) container, where it is not meaningful.
         #
         # @return [Integer, nil]
         # @example
@@ -279,7 +306,7 @@ module Lich
           return nil if opaque?
           return @in_encum unless @in_encum.nil?
 
-          @children.sum(&:weight)
+          @children.sum(&:total_weight)
         end
 
         # Remaining weight capacity in pounds, or +nil+ when either capacity or
@@ -362,33 +389,53 @@ module Lich
           @children.freeze
         end
 
-        # Registers this item into the matching GameObj registry based on its loc
-        # relation, so GameObj-native queries (+GameObj.contents+, +GameObj.inv+,
-        # +GameObj.right_hand+, +GameObj.loot+) reflect the extended-feed tree. The
-        # returned object is also reused for {#type}/{#sellable}. Called once per
-        # item when a snapshot is committed; see {Lich::Common::Inventory} for the
-        # relation->registry mapping and its staleness caveats.
+        # Mirrors this item into GameObj for a committed snapshot. Only the two
+        # registries the extended feed authoritatively owns are written: +worn+ ->
+        # +@@inv+ and +in+/+on+ -> +@@contents[parent]+ (both via the staging-aware
+        # {GameObj.new_inv}, so the caller's +begin_inv+/+begin_container+ cycle
+        # publishes them atomically). Hands and room loot are left to the classic
+        # +<right>+/+<left>+/room-objs streams, which are live and authoritative for
+        # those slots. Every other item (hands, room, atfeet, unknown relations, or
+        # a target the caller skipped this cycle) is pooled identity-only via
+        # {GameObj.index_or_create} so {#type}/{#sellable} still classify, without a
+        # registry placement.
         #
+        # @param place_worn [Boolean] whether to route worn items into +@@inv+ this
+        #   cycle (false when a classic inv refresh is already open)
+        # @param open_container_ids [Set<String>] container ids whose staging the
+        #   caller opened this cycle; an in/on item lands in +@@contents+ only if
+        #   its parent is among them
         # @return [GameObj]
         # @api private
-        def register_gameobj
+        def register_gameobj(place_worn:, open_container_ids:)
           before, name, after = descriptive_parts
           @gameobj =
             case @relation
-            when 'righthand' then GameObj.new_right_hand(@id, @noun, name)
-            when 'lefthand'  then GameObj.new_left_hand(@id, @noun, name)
-            when 'room'      then GameObj.new_loot(@id, @noun, name)
-            when 'in', 'on'  then GameObj.new_inv(@id, @noun, name, @parent_id, before, after)
-            when 'worn'      then register_worn(name, before, after)
-            # 'atfeet' is on-character (at the player's own feet), NOT off-character
-            # room loot, so it is deliberately NOT written to @@loot -- only pooled
-            # for identity/classification and surfaced via Inventory#at_feet.
-            else GameObj.index_or_create(@id, @noun, name, before, after)
+            when 'worn'
+              place_worn ? GameObj.new_inv(@id, @noun, name, nil, before, after) : GameObj.index_or_create(@id, @noun, name, before, after)
+            when 'in', 'on'
+              if open_container_ids.include?(@parent_id)
+                GameObj.new_inv(@id, @noun, name, @parent_id, before, after)
+              else
+                GameObj.index_or_create(@id, @noun, name, before, after)
+              end
+            else
+              GameObj.index_or_create(@id, @noun, name, before, after)
             end
           backfill_names(@gameobj, before, after)
         end
 
         private
+
+        # Freezes a string in place (nil-safe), so identity fields cannot be
+        # mutated through a published snapshot.
+        #
+        # @param str [String, nil]
+        # @return [String, nil]
+        # @api private
+        def freeze_str(str)
+          str.nil? ? str : str.freeze
+        end
 
         # Backfills +before_name+/+after_name+ on a registered GameObj when the
         # constructor did not carry them (the hand/loot constructors take only a
@@ -405,23 +452,6 @@ module Lich
           gameobj.before_name = before if gameobj.before_name.nil? && !before.nil?
           gameobj.after_name  = after  if gameobj.after_name.nil?  && !after.nil?
           gameobj
-        end
-
-        # Registers a worn item into +@@inv+, deduped by exist id so it does not
-        # duplicate an entry the classic stream already published under a slightly
-        # different name. (Any surviving entry is transient anyway -- the classic
-        # inv refresh wholesale-replaces +@@inv+.)
-        #
-        # @param name [String]
-        # @param before [String, nil]
-        # @param after [String, nil]
-        # @return [GameObj]
-        # @api private
-        def register_worn(name, before, after)
-          existing = GameObj.inv&.find { |obj| obj.id == @id }
-          return existing if existing
-
-          GameObj.new_inv(@id, @noun, name, nil, before, after)
         end
 
         # The {GameObj} backing this item's classification. Normally the object
@@ -468,6 +498,16 @@ module Lich
       # An immutable, point-in-time inventory snapshot. Returned by {.refresh} so
       # a caller has a consistent view even as passive absorption swaps the global
       # snapshot. Query it directly rather than re-reading the global accessors.
+      #
+      # ## Immutability contract
+      #
+      # The Snapshot, its id-keyed item map, and its worn/room/at-feet collections
+      # are frozen; each {Item}'s identity strings, {Item#flags}, and {Item#children}
+      # are frozen too, so a consumer cannot corrupt shared state through a returned
+      # object (e.g. +item.flags << "locked"+ raises). The {Item} objects themselves
+      # are deliberately NOT frozen: their backing {GameObj} is populated lazily for
+      # classification (see {Item#register_gameobj}), which would be impossible on a
+      # frozen instance. Treat every field as read-only regardless.
       class Snapshot
         # @return [Time] wall-clock time the snapshot was built
         attr_reader :last_updated
@@ -601,14 +641,31 @@ module Lich
         # @return [String, nil] the envelope +id+ (request id)
         attr_reader :manager_id
 
+        # @return [String, nil] the envelope +root+ (present on a continuation
+        #   response; must be absent on an initial response)
+        attr_reader :root
+
+        # @return [String, nil] the envelope +after+ cursor (continuation response)
+        attr_reader :after
+
+        # @return [String, nil] the envelope +state+ ("stale" == interrupted)
+        attr_reader :state
+
+        # @return [Array<Hash>] raw attribute hashes, one per <continuation>
+        #   (each carries a +root+ and +last+ marker for a branch not yet sent)
+        attr_reader :continuations
+
         def initialize
-          @items        = []
-          @errors       = []
-          @room_id      = nil
-          @manager_id   = nil
-          @continuation = false
-          @element      = nil
-          @attributes   = nil
+          @items         = []
+          @errors        = []
+          @room_id       = nil
+          @manager_id    = nil
+          @root          = nil
+          @after         = nil
+          @state         = nil
+          @continuations = []
+          @element       = nil
+          @attributes    = nil
         end
 
         # @param name [String] element name
@@ -631,13 +688,15 @@ module Lich
         def attrs_done
           case @element
           when 'inventoryManager'
-            @manager_id   = @attributes['id']
-            @room_id      = @attributes['room']
-            @continuation = true if @attributes.key?('root') || @attributes.key?('after')
+            @manager_id = @attributes['id']
+            @room_id    = @attributes['room']
+            @root       = @attributes['root']
+            @after      = @attributes['after']
+            @state      = @attributes['state']
           when 'i'
             @items << @attributes
           when 'continuation'
-            @continuation = true
+            @continuations << @attributes
           end
         end
 
@@ -661,11 +720,56 @@ module Lich
           @errors << "#{message} (line #{line}, column #{column})"
         end
 
-        # @return [Boolean] whether this was a continuation/paginated response
+        # @return [Boolean] whether this response is part of a paginated exchange:
+        #   it either carries +<continuation>+ children (more branches to fetch) or
+        #   is itself a continuation response (has a +root+/+after+ envelope).
         def continuation?
-          @continuation
+          !@continuations.empty? || !@root.nil? || !@after.nil?
         end
       end
+
+      # Mutable, single-refresh accumulator that assembles a paginated inventory
+      # from an initial response plus its continuation responses. Owned by the
+      # calling {.refresh} thread; {.observe} only deposits parsed parts on its
+      # {#latch}. All field mutation happens under the module +@mutex+ (see
+      # {Inventory.accept_part}).
+      #
+      # @api private
+      class Assembly
+        # @return [String, nil] envelope room id (set from the initial response)
+        attr_accessor :room
+
+        # @return [Hash{String => Item}] accumulated items, wire order
+        attr_reader :items
+
+        # @return [Set<String>] "room\0root\0last" cursors already queued (repeat
+        #   guard against a server that loops us)
+        attr_reader :seen_cursors
+
+        # @return [Array<Hash>] continuation cursors not yet requested
+        attr_reader :queue
+
+        # @return [Hash{String => (Symbol, Hash)}] request id => :initial or cursor
+        attr_reader :pending
+
+        # @return [Array<String>] continuation commands staged to send after the
+        #   module mutex is released (never send under a lock)
+        attr_reader :outbound
+
+        # @return [Thread::Queue] parts deposited by {.observe} for this refresh
+        attr_reader :latch
+
+        def initialize
+          @room         = nil
+          @items        = {}
+          @seen_cursors = Set.new
+          @queue        = []
+          @pending      = {}
+          @outbound     = []
+          @latch        = Queue.new
+        end
+      end
+      private_constant :Assembly
 
       @mutex         = Mutex.new
       @refresh_mutex = Mutex.new
@@ -679,8 +783,14 @@ module Lich
         # parser thread and drop the player's session), and never sends upstream.
         #
         # Fails closed on: an Ox parse error, a line that does not structurally
-        # close, a continuation/paginated response, or a zero-item PASSIVE
-        # response over a non-empty snapshot (no snapshot swap, no GameObj writes).
+        # close, or a zero-item PASSIVE response over a non-empty snapshot (no
+        # snapshot swap, no GameObj writes). A PASSIVE paginated response is also
+        # failed closed -- assembling one requires sending continuation requests,
+        # which observe must never do; use {.refresh} for paginated inventories.
+        #
+        # A response whose id belongs to an in-progress {.refresh} assembly is
+        # routed to that refresh's latch (the refresh thread validates, accumulates,
+        # and drives the continuation exchange); observe stays passive.
         #
         # @param server_string [String] a raw line from the game server
         # @return [String] +server_string+, unchanged
@@ -693,11 +803,8 @@ module Lich
 
           begin
             handler = parse(server_string)
-            if response_complete?(handler, server_string)
-              commit(handler, build_snapshot(handler))
-            else
-              reject(handler)
-            end
+            closed  = structurally_closed?(server_string)
+            route_response(handler, closed)
           rescue StandardError => e
             log("Inventory.observe error: #{e.class}: #{e.message}")
           end
@@ -705,17 +812,24 @@ module Lich
           server_string
         end
 
-        # Requests a fresh inventory load and returns the resulting snapshot.
-        # Sends +_inventory manager {id}+, then waits (on the CALLER thread) up to
-        # +timeout+ seconds for {.observe} to signal that id complete.
+        # Requests a fresh inventory load and returns the resulting snapshot,
+        # assembling paginated (continuation) responses transparently. Sends
+        # +_inventory manager {id}+; the PARSER thread ({.observe}) then folds the
+        # initial response and any continuation responses into the assembly and,
+        # when the tree is whole, mirrors it into GameObj -- so all registry writes
+        # stay on the parser thread. This caller thread only issues the continuation
+        # requests the parser thread asks for (+_inventory manager {id} continue
+        # {room} {root} {last}+, up to {MAX_CONCURRENT_CONTINUATIONS} in flight) and
+        # waits for the finished snapshot or +timeout+.
         #
-        # Returns +nil+ on timeout, on a truncated/continuation response, or when
-        # the feed is known-absent (fast-fails without sending, re-probing on a
-        # capped exponential backoff). Callers should use the RETURNED object for
-        # a consistent view, since passive absorption may swap the global
-        # snapshot at any time.
+        # Returns +nil+ on timeout, on a malformed/mismatched response, or when the
+        # feed is known-absent (fast-fails without sending, re-probing on a capped
+        # exponential backoff). Callers should use the RETURNED object for a
+        # consistent view, since passive absorption may swap the global snapshot at
+        # any time.
         #
-        # @param timeout [Numeric] seconds to wait (5s matches the official client)
+        # @param timeout [Numeric] seconds to wait for the whole exchange (5s
+        #   matches the official client)
         # @return [Snapshot, nil] the fresh snapshot, or nil on failure/absence
         # @note MUST run on a script thread. Never call from a Downstream/Upstream
         #   hook proc -- it would block waiting on the parser thread.
@@ -726,24 +840,21 @@ module Lich
           return @snapshot unless probe_allowed?
 
           @refresh_mutex.synchronize do
-            id = generate_id
-            latch = Queue.new
-            @mutex.synchronize { @pending[id] = latch }
+            assembly = Assembly.new
+            deadline = monotonic_now + timeout
+            initial  = generate_id
+
+            @mutex.synchronize do
+              assembly.pending[initial] = :initial
+              @assemblies[initial] = assembly
+            end
+            Game._puts("_inventory manager #{initial}")
 
             begin
-              Game._puts("_inventory manager #{id}")
-              result = latch.pop(timeout: timeout)
-            ensure
-              @mutex.synchronize { @pending.delete(id) }
-            end
-
-            if result.nil?
-              register_timeout!
-              nil
-            elsif result.equal?(FAILED)
-              nil
-            else
-              result
+              drive_refresh(assembly, deadline)
+            rescue StandardError => e
+              log("Inventory.refresh error: #{e.class}: #{e.message}")
+              abort_assembly(assembly)
             end
           end
         end
@@ -844,8 +955,11 @@ module Lich
           @snapshot
         end
 
-        # Clears all snapshot and feed state. Intended for a session reset /
-        # reconnect; also used to isolate tests.
+        # Clears all snapshot and feed state, and drops the GameObj containers
+        # Inventory still owns so no stale container mirror survives. Worn items are
+        # left to the classic inv stream (which wholesale-replaces +@@inv+ on its
+        # next refresh); hands and loot were never mirrored. Intended for a session
+        # reset / reconnect; also used to isolate tests.
         #
         # @return [void]
         def reset!
@@ -855,10 +969,25 @@ module Lich
           @feed_absent_until  = nil
           @absent_backoff     = PROBE_BACKOFF_BASE_SECONDS
           @id_counter         = 0
-          (@pending ||= {}).clear
+          (@assemblies ||= {}).clear
+          purge_owned_containers!
+          @owned_container_ids = Set.new
         end
 
         private
+
+        # Drops every container Inventory still owns from GameObj. Used by {.reset!}
+        # so a session reset / reconnect leaves no stale container mirror behind.
+        # Inert when GameObj is not loaded (the load-time {.reset!}) or nothing has
+        # been mirrored yet.
+        #
+        # @return [void]
+        # @api private
+        def purge_owned_containers!
+          return if @owned_container_ids.nil? || @owned_container_ids.empty? || !defined?(GameObj)
+
+          @owned_container_ids.each { |id| GameObj.delete_container(id) }
+        end
 
         # Parses one isolated line with a dedicated Ox SAX handler (never the live
         # XMLData). +convert_special: false+ keeps Ox in bytes-land, mirroring the
@@ -873,18 +1002,240 @@ module Lich
           handler
         end
 
-        # A response is usable only if Ox reported no errors, the line
-        # structurally closed, and it is not a continuation/paginated fragment.
+        # Routes a parsed response (PARSER thread). If its id belongs to an
+        # in-progress {.refresh} assembly, fold the part into it right here -- and,
+        # when that completes the tree, mirror it into GameObj on this thread --
+        # then hand the waiting refresh a directive (send more / done / error).
+        # Otherwise treat it as a passive standalone response. Never sends upstream.
         #
         # @param handler [Handler]
-        # @param server_string [String]
+        # @param closed [Boolean] whether the line structurally closed
+        # @return [void]
+        # @api private
+        def route_response(handler, closed)
+          assembly  = nil
+          directive =
+            @mutex.synchronize do
+              assembly = @assemblies.delete(handler.manager_id)
+              fold_part(assembly, handler, closed) if assembly
+            end
+          return passive_absorb(handler, closed) unless assembly
+
+          assembly.latch << directive
+        end
+
+        # Folds one part into its assembly and returns the directive the waiting
+        # {.drive_refresh} should act on. On completion the snapshot is mirrored and
+        # published here (parser thread) via {#finalize_assembly}. Caller holds
+        # {@mutex}.
+        #
+        # @param assembly [Assembly]
+        # @param handler [Handler]
+        # @param closed [Boolean]
+        # @return [Array] +[:error]+, +[:send, commands]+, or +[:done, snapshot]+
+        # @api private
+        def fold_part(assembly, handler, closed)
+          case accept_part(assembly, handler, closed)
+          when :error then [:error]
+          when :done  then [:done, finalize_assembly(assembly)]
+          else
+            commands = assembly.outbound.dup
+            assembly.outbound.clear
+            [:send, commands]
+          end
+        end
+
+        # Absorbs an unsolicited standalone response as the new snapshot. A
+        # paginated passive response is failed closed (observe cannot send the
+        # continuation requests needed to complete it).
+        #
+        # @param handler [Handler]
+        # @param closed [Boolean]
+        # @return [void]
+        # @api private
+        def passive_absorb(handler, closed)
+          if standalone_complete?(handler, closed)
+            commit_passive(build_snapshot(handler))
+          else
+            log("Inventory: discarding incomplete/paginated passive inventoryManager response (id=#{handler.manager_id})")
+          end
+        end
+
+        # A standalone (non-paginated) response is usable only if Ox reported no
+        # errors, the line structurally closed, and it is neither a continuation
+        # response nor announces continuation branches.
+        #
+        # @param handler [Handler]
+        # @param closed [Boolean]
         # @return [Boolean]
         # @api private
-        def response_complete?(handler, server_string)
-          return false unless handler.errors.empty?
-          return false if handler.continuation?
+        def standalone_complete?(handler, closed)
+          handler.errors.empty? && closed && !handler.continuation?
+        end
 
-          structurally_closed?(server_string)
+        # Drives a {.refresh} exchange on the CALLER thread: waits for directives the
+        # parser thread ({#fold_part}) posts to the latch, issuing any continuation
+        # requests it asks for, until the finished snapshot arrives or the deadline
+        # passes. Sends happen here (never on the parser thread); folding and GameObj
+        # mirroring happen on the parser thread. Returns nil on timeout/error.
+        #
+        # @param assembly [Assembly]
+        # @param deadline [Float] monotonic deadline for the whole exchange
+        # @return [Snapshot, nil]
+        # @api private
+        def drive_refresh(assembly, deadline)
+          loop do
+            remaining = deadline - monotonic_now
+            return abort_assembly(assembly, timed_out: true) if remaining <= 0
+
+            directive = assembly.latch.pop(timeout: remaining)
+            return abort_assembly(assembly, timed_out: true) if directive.nil?
+
+            case directive.first
+            when :error then return abort_assembly(assembly)
+            when :done  then return directive.last
+            when :send  then directive.last.each { |cmd| Game._puts(cmd) }
+            end
+          end
+        end
+
+        # Folds one parsed part into an assembly. Validates the envelope, dedupes
+        # and orders items, queues announced continuations, and stages the next
+        # batch of continuation requests. Caller must hold {@mutex}.
+        #
+        # @param assembly [Assembly]
+        # @param handler [Handler]
+        # @param closed [Boolean] whether the line structurally closed
+        # @return [Symbol] :error, :continue, or :done
+        # @api private
+        def accept_part(assembly, handler, closed)
+          kind = assembly.pending.delete(handler.manager_id)
+          return :error if kind.nil? || !handler.errors.empty? || !closed
+          return :error if handler.state == 'stale' # interrupted mid-exchange
+          return :error unless handler.state.nil? # unknown inventory state
+          return :error unless valid_envelope?(assembly, handler, kind)
+          return :error unless accumulate_items(assembly, handler)
+          return :error unless queue_continuations(assembly, handler)
+
+          drain_queue(assembly)
+          assembly.queue.empty? && assembly.pending.empty? ? :done : :continue
+        end
+
+        # Validates a part's envelope against what its request expected. An initial
+        # response must carry a room and no continuation envelope; a continuation
+        # response must echo the exact cursor it answered. Caller holds {@mutex}.
+        #
+        # @param assembly [Assembly]
+        # @param handler [Handler]
+        # @param kind [Symbol, Hash] :initial or the cursor this part answers
+        # @return [Boolean]
+        # @api private
+        def valid_envelope?(assembly, handler, kind)
+          if kind == :initial
+            return false if !handler.root.nil? || !handler.after.nil?
+            return false if handler.room_id.nil?
+
+            assembly.room = handler.room_id
+            # A valid initial proves the feed exists, even if the rest of a
+            # paginated exchange later stalls or fails.
+            mark_feed_present!
+            true
+          else
+            handler.room_id == kind[:room] && handler.root == kind[:root] && handler.after == kind[:last]
+          end
+        end
+
+        # Folds a part's items into the assembly, rejecting a duplicate id or an
+        # item that precedes its (non player/room) parent. Caller holds {@mutex}.
+        #
+        # @param assembly [Assembly]
+        # @param handler [Handler]
+        # @return [Boolean] false on a malformed item stream
+        # @api private
+        def accumulate_items(assembly, handler)
+          handler.items.each do |raw|
+            item = build_item(raw)
+            return false if assembly.items.key?(item.id)
+
+            pid = item.parent_id
+            return false unless pid.nil? || pid == 'player' || pid == 'room' || assembly.items.key?(pid)
+
+            assembly.items[item.id] = item
+          end
+          true
+        end
+
+        # Enqueues the continuation cursors a part announces, failing closed on a
+        # malformed marker or a repeated cursor (a server loop). Caller holds
+        # {@mutex}.
+        #
+        # @param assembly [Assembly]
+        # @param handler [Handler]
+        # @return [Boolean] false on a malformed or repeated cursor
+        # @api private
+        def queue_continuations(assembly, handler)
+          handler.continuations.each do |c|
+            root = c['root']
+            last = c['last']
+            return false if root.nil? || last.nil?
+
+            key = "#{assembly.room}\0#{root}\0#{last}"
+            return false if assembly.seen_cursors.include?(key)
+
+            assembly.seen_cursors.add(key)
+            assembly.queue << { room: assembly.room, root: root, last: last }
+          end
+          true
+        end
+
+        # Stages continuation requests (into +assembly.outbound+) until the number
+        # in flight reaches {MAX_CONCURRENT_CONTINUATIONS} or the queue drains.
+        # Caller holds {@mutex}.
+        #
+        # @param assembly [Assembly]
+        # @return [void]
+        # @api private
+        def drain_queue(assembly)
+          while !assembly.queue.empty? && assembly.pending.size < MAX_CONCURRENT_CONTINUATIONS
+            cursor = assembly.queue.shift
+            req_id = generate_id
+            assembly.pending[req_id] = cursor
+            @assemblies[req_id] = assembly
+            assembly.outbound << "_inventory manager #{req_id} continue #{cursor[:room]} #{cursor[:root]} #{cursor[:last]}"
+          end
+        end
+
+        # Builds the completed snapshot from a finished assembly, mirrors it into
+        # GameObj, and swaps it in as the global snapshot. Runs on the parser thread
+        # with {@mutex} already held (see {#fold_part}), so the GameObj registry
+        # writes stay single-threaded, consistent with the classic parser.
+        #
+        # @param assembly [Assembly]
+        # @return [Snapshot]
+        # @api private
+        def finalize_assembly(assembly)
+          wire_tree(assembly.items)
+          snapshot = Snapshot.new(items: assembly.items, room_id: assembly.room)
+          mark_feed_present!
+          register_with_gameobj(snapshot)
+          @snapshot = snapshot
+          snapshot
+        end
+
+        # Tears down an assembly: drops its request-id routing entries so any late
+        # parts fall through to the passive path, and records a feed timeout when
+        # the exchange never completed in time.
+        #
+        # @param assembly [Assembly]
+        # @param timed_out [Boolean]
+        # @return [nil]
+        # @api private
+        def abort_assembly(assembly, timed_out: false)
+          @mutex.synchronize do
+            @assemblies.delete_if { |_id, a| a.equal?(assembly) }
+            register_timeout! if timed_out
+          end
+          nil
         end
 
         # Whether the line contains a real closing tag or is self-closing. A
@@ -1020,64 +1371,69 @@ module Lich
           str.gsub(/&(amp|lt|gt|quot|apos);/) { XML_ENTITIES[Regexp.last_match(1)] }
         end
 
-        # Commits a completed snapshot under the mutex: the feed is now known
-        # present; populate the GameObj registries and swap the snapshot in
-        # atomically LAST, except a zero-item PASSIVE response must not clobber a
-        # non-empty snapshot; then signal any {.refresh} waiting on this id.
+        # Commits a completed PASSIVE snapshot under the mutex: the feed is now
+        # known present; populate the GameObj registries and swap the snapshot in
+        # atomically LAST, except a zero-item passive response must not clobber a
+        # non-empty snapshot.
         #
-        # @param handler [Handler]
         # @param snapshot [Snapshot]
         # @return [void]
         # @api private
-        def commit(handler, snapshot)
-          id = handler.manager_id
+        def commit_passive(snapshot)
           @mutex.synchronize do
             mark_feed_present!
-            solicited = @pending.key?(id)
 
-            if snapshot.all.empty? && !solicited && @snapshot && !@snapshot.all.empty?
-              log("Inventory: ignoring empty passive inventoryManager response (id=#{id})")
+            if snapshot.all.empty? && @snapshot && !@snapshot.all.empty?
+              log('Inventory: ignoring empty passive inventoryManager response')
             else
               register_with_gameobj(snapshot)
               @snapshot = snapshot
             end
-
-            deliver_locked(id, snapshot)
           end
         end
 
-        # Registers every item of an accepted snapshot into GameObj (see
-        # {Item#register_gameobj} and {Lich::Common::Inventory} for the mapping).
+        # Mirrors an accepted snapshot into GameObj by ATOMIC wholesale replace of
+        # the two registries the extended feed owns, using the #1370 staging swap:
+        #
+        # - +@@inv+ (worn): +begin_inv+ -> register worn items -> +commit_inv+, so
+        #   anything worn before and not worn now is gone after the swap.
+        # - +@@contents[id]+ (each non-opaque container): +begin_container(id)+ ->
+        #   register its children -> +commit_container(id)+, a per-container replace.
+        #
+        # Locked/opaque containers are skipped entirely -- they report zero children
+        # by design, so replacing their contents with +[]+ would destroy last-known
+        # state. A container Inventory previously mirrored that has vanished from the
+        # tree (not merely gone opaque) is dropped with +delete_container+.
+        #
+        # A target whose classic staged refresh is already open ({GameObj.inv_refresh_open?}
+        # / {GameObj.container_refresh_open?}) is skipped this cycle so Inventory
+        # cannot truncate an in-flight classic fill; its items fall back to
+        # identity-only pooling and the mirror self-heals on the next response.
+        #
+        # Runs on the parser thread with {@mutex} held (see {#finalize_assembly} /
+        # {#commit_passive}), so registry writes stay single-threaded.
         #
         # @param snapshot [Snapshot]
         # @return [void]
         # @api private
         def register_with_gameobj(snapshot)
-          snapshot.all.each(&:register_gameobj)
-        end
+          containers  = snapshot.containers
+          present_ids = Set.new(containers.map(&:id))
+          place_worn  = !GameObj.inv_refresh_open?
+          open_ids    = Set.new(
+            containers.reject(&:opaque?).map(&:id).reject { |id| GameObj.container_refresh_open?(id) }
+          )
 
-        # Handles an incomplete/continuation response: keep the prior snapshot and
-        # fail a waiting {.refresh} for this id closed.
-        #
-        # @param handler [Handler]
-        # @return [void]
-        # @api private
-        def reject(handler)
-          log("Inventory: discarding incomplete/continuation inventoryManager response (id=#{handler.manager_id})")
-          @mutex.synchronize { deliver_locked(handler.manager_id, FAILED) }
-        end
+          GameObj.begin_inv if place_worn
+          open_ids.each { |id| GameObj.begin_container(id) }
 
-        # Pushes a value to a pending refresh latch. Caller must hold {@mutex}.
-        #
-        # @param id [String, nil]
-        # @param value [Snapshot, Object] a snapshot or the {FAILED} sentinel
-        # @return [void]
-        # @api private
-        def deliver_locked(id, value)
-          return if id.nil?
+          snapshot.all.each { |item| item.register_gameobj(place_worn: place_worn, open_container_ids: open_ids) }
 
-          latch = @pending[id]
-          latch << value if latch
+          GameObj.commit_inv if place_worn
+          open_ids.each { |id| GameObj.commit_container(id) }
+
+          (@owned_container_ids - present_ids).each { |id| GameObj.delete_container(id) }
+          @owned_container_ids = present_ids
         end
 
         # Marks the feed present and resets absence/backoff bookkeeping.

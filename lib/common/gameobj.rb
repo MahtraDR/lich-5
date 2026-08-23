@@ -600,6 +600,21 @@ module Lich
         @@contents.delete(container_id)
       end
 
+      # Whether a top-level inventory (+@@inv+) staged refresh is currently open.
+      # Lets a second writer (e.g. the {Lich::Common::Inventory} read-model) skip
+      # its own +begin_inv+/+commit_inv+ cycle so it cannot prematurely publish or
+      # truncate an in-flight classic +@@inv+ refresh.
+      #
+      # @return [Boolean]
+      def self.inv_refresh_open? = !@@staging_inv.nil?
+
+      # Whether a staged refresh for one container's contents is currently open.
+      # Same purpose as {.inv_refresh_open?}, scoped to a single container id.
+      #
+      # @param container_id [String]
+      # @return [Boolean]
+      def self.container_refresh_open?(container_id) = @@staging_contents.key?(container_id)
+
       # ---------------------------------------------------------------------------
       # Staged registry refresh - begin/commit pairs
       #
