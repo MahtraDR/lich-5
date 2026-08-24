@@ -148,8 +148,23 @@ module Lich
           when '*' then lhs * rhs
           when '/' then lhs / rhs
           when '\\' then integer_divide(lhs, rhs)
-          when '%' then lhs.remainder(rhs)
+          when '%' then modulo(lhs, rhs)
           end
+        end
+
+        # C# double `%` (Genie4 MathEval.cs:222 `operand1 % operand2`): truncated
+        # remainder carrying the DIVIDEND's sign, with `x % 0 => NaN`. Ruby's
+        # Float#remainder matches fmod for ordinary magnitudes but returns 0.0 when the
+        # DIVISOR dwarfs the dividend (`-95 % 24^21` -> 0.0 instead of -95). In that case
+        # trunc(lhs/rhs) is 0, so the remainder is exactly the dividend -- special-case it;
+        # otherwise Float#remainder is precise (and beats a subtract-formula, which loses
+        # precision for large dividends like `77^12 % 83`). Both edges were caught by the
+        # Genie4 differential fuzzer (genie-port-lab/reference/fuzz_oracle.rb).
+        def modulo(lhs, rhs)
+          return Float::NAN if rhs.zero?
+          return lhs if lhs.abs < rhs.abs
+
+          lhs.remainder(rhs)
         end
 
         def integer_divide(lhs, rhs)

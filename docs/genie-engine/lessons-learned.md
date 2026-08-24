@@ -334,6 +334,26 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   `if`/`math`/`shift` command bodies (1 `if` case in the corpus) -- those fall through to the game;
   next item if it bites.
 
+- **Differential fuzzing against a REAL Genie4 oracle beats hand-picked specs (v0.9.4).** We can
+  run Genie4's actual C# evaluators headless on macOS: the quirk-laden `Script/Eval.cs` +
+  `Script/MathEval.cs` are WinForms-free, so a small `net8.0` console (genie-port-lab/oracle/, linked
+  to those files + a 2-symbol shim for `Utility.StringToDouble`/`Globals.VariableList`) exposes
+  `math`/`eval`/`evalbool` CLIs. A Ruby fuzzer (genie-port-lab/reference/fuzz_oracle.rb) throws
+  thousands of random expressions at both and diffs. Result: 0 value-diffs across ~19k valid cases --
+  BUT it caught a modulo bug specs never would: **Ruby's `Float#remainder` returns 0.0 when the
+  DIVISOR dwarfs the dividend** (`-95 % 24^21` -> 0.0, not -95), while a subtract-formula loses
+  precision for huge DIVIDENDS (`77^12 % 83`). Genie4's `%` is C# `double % double` (exact fmod,
+  dividend sign, `x%0`->NaN). Fix in math_eval.rb `modulo`: `return lhs if lhs.abs < rhs.abs`
+  (trunc(lhs/rhs)==0 so remainder IS the dividend), else `Float#remainder`; `rhs.zero? -> NaN`.
+  General lesson: for any ported pure-computation layer, build the source oracle and fuzz it -- it
+  finds float/edge divergences no tester or example-based spec will. (Needs .NET 8 SDK; net6-windows
+  full app won't build on macOS, only the pure files.)
+- **Known unreached parity gap (fuzzer-surfaced): domain errors.** `sqrt(-x)`/`log(<=0)`/`ln(<=0)`
+  return NaN/-Infinity in Genie4 (C# Math.*), but our MathEval RAISES (evalmath then rescues to '0').
+  ~140/10k fuzz cases. sqrt/log/ln have ZERO corpus uses, so unreached today; matching would mean
+  returning Float::NAN/-INFINITY and verifying evalmath's NaN FORMATTING equals Genie's. Deferred
+  pending a decision (left strict-raise for now; revisit if a script feeds out-of-domain values).
+
 ## DR game-state (the big surprises)
 - **`XMLData` is shared GS/DR.** DR-specific state lives in DR modules.
 - **DR `room_title` is DOUBLE-bracketed**: `"[[Bosque Deriel, Burial Ground]]"`

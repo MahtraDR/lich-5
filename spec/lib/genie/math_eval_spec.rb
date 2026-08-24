@@ -39,6 +39,14 @@ RSpec.describe Lich::Genie::MathEval do
       expect(evl('5 % 3')).to eq(2.0)
     end
 
+    # Genie4 differential-fuzzer regressions: C# double `%` stays exact when the operands
+    # differ wildly in magnitude, where Ruby's Float#remainder / a subtract-formula don't.
+    it 'matches Genie4 modulo for extreme operand magnitudes' do
+      expect(evl('-95 % (4! ^ 21.0)')).to eq(-95.0) # |divisor| >> |dividend| -> dividend
+      expect(evl('(77 ^ 12.0) % 83')).to eq(80.0)   # |dividend| huge -> still precise
+      expect(evl('5 % 0').nan?).to be(true) # C# double x % 0 -> NaN
+    end
+
     it 'computes factorial (postfix !)' do
       expect(evl('5 !')).to eq(120.0)
       expect(evl('0 !')).to eq(1.0)
