@@ -7,6 +7,11 @@ module Lich
     module Numeric
       module_function
 
+      # .NET (net6, en-US) renders infinity as U+221E. Built from the codepoint so the
+      # source stays ASCII (the AsciiOnlySource cop rejects even a \u escape that yields
+      # a non-ASCII char) while emitting exactly what Genie's double.ToString() produces.
+      INFINITY_SIGN = [0x221E].pack('U')
+
       # Port of Utility.StringToDouble: en-US parse, returns -1.0 (NOT 0) on
       # empty/nil/parse-failure. Tolerates thousands separators like .NET.
       #
@@ -60,22 +65,56 @@ module Lich
         to_integer(value)
       end
 
-      # Stringify a double the way .NET's default double.ToString() ("G"/shortest
-      # round-trip) does: integers print without a decimal point; other values use
-      # the shortest representation. Used to store math/eval results back into vars.
+      # Stringify a double byte-for-byte as .NET's default double.ToString() (net6,
+      # en-US) does -- which is what Genie's `evalmath`/`math` store back into vars
+      # (Command.cs EvalMath). .NET uses the SHORTEST round-trippable digits, fixed-point
+      # notation when the leading digit's power-of-ten exponent is in [-4, 16], and
+      # scientific ("1.5E+30", "1E-05", min 2 exponent digits) otherwise. Ruby's
+      # Float#to_s yields the same shortest DIGITS, so we reuse them and re-lay-out.
+      # Verified byte-exact against the real Genie4 evaluator via the differential fuzzer
+      # (genie-port-lab/reference/fuzz_format.rb).
       #
       # @param value [Numeric]
       # @return [String]
       def format_double(value)
         f = value.to_f
         return 'NaN' if f.nan?
-        return f.positive? ? 'Infinity' : '-Infinity' if f.infinite?
+        return f.positive? ? INFINITY_SIGN : "-#{INFINITY_SIGN}" if f.infinite?
+        return (1.0 / f).negative? ? '-0' : '0' if f.zero? # preserve -0 like .NET
 
-        if f == f.to_i && f.abs < 1e15
-          f.to_i.to_s
+        digits, exp = shortest_digits(f.abs) # value == d.igits * 10**exp
+        body = exp.between?(-4, 16) ? fixed_notation(digits, exp) : scientific_notation(digits, exp)
+        f.negative? ? "-#{body}" : body
+      end
+
+      # Shortest significant digits (no dot, no leading/trailing zeros) of a positive
+      # finite double, plus the power-of-ten exponent of the FIRST digit. Reuses Ruby's
+      # shortest Float#to_s. @return [[String, Integer]]
+      def shortest_digits(x)
+        str = x.to_s
+        mantissa, sci = str.include?('e') ? str.split('e') : [str, '0']
+        intpart, frac = mantissa.split('.')
+        digits = intpart + (frac || '')
+        exp = sci.to_i + intpart.length - 1 # exponent of the first char of `digits`
+        lead = digits.length - digits.sub(/\A0+/, '').length
+        digits = digits.sub(/\A0+/, '').sub(/0+\z/, '')
+        digits = '0' if digits.empty?
+        [digits, exp - lead]
+      end
+
+      def fixed_notation(digits, exp)
+        if exp.negative?
+          "0.#{'0' * (-exp - 1)}#{digits}"
+        elsif digits.length <= exp + 1
+          digits + ('0' * (exp + 1 - digits.length))
         else
-          f.to_s
+          "#{digits[0, exp + 1]}.#{digits[(exp + 1)..]}"
         end
+      end
+
+      def scientific_notation(digits, exp)
+        mantissa = digits.length > 1 ? "#{digits[0]}.#{digits[1..]}" : digits
+        "#{mantissa}E#{exp.negative? ? '-' : '+'}#{format('%02d', exp.abs)}"
       end
     end
   end

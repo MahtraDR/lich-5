@@ -47,6 +47,18 @@ RSpec.describe Lich::Genie::MathEval do
       expect(evl('5 % 0').nan?).to be(true) # C# double x % 0 -> NaN
     end
 
+    # Genie4 uses C# System.Math, which returns NaN/Infinity for domain errors rather
+    # than raising (verified via the differential oracle/fuzzer).
+    it 'returns NaN/Infinity for domain errors like C# Math (not raising)' do
+      expect(evl('sqrt(-1)').nan?).to be(true)
+      expect(evl('log(-1)').nan?).to be(true)
+      expect(evl('ln(-1)').nan?).to be(true)
+      expect(evl('log(0)')).to eq(-Float::INFINITY)
+      expect(evl('(-4 ^ 0.5)').nan?).to be(true) # negative base, non-integer exponent
+      expect(evl('1 ^ (0 / 0)')).to eq(1.0)      # C# Pow(1, NaN) == 1
+      expect(evl('floor(sqrt(-9))').nan?).to be(true) # NaN passes through floor
+    end
+
     it 'computes factorial (postfix !)' do
       expect(evl('5 !')).to eq(120.0)
       expect(evl('0 !')).to eq(1.0)

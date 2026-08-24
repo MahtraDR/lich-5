@@ -348,11 +348,22 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   General lesson: for any ported pure-computation layer, build the source oracle and fuzz it -- it
   finds float/edge divergences no tester or example-based spec will. (Needs .NET 8 SDK; net6-windows
   full app won't build on macOS, only the pure files.)
-- **Known unreached parity gap (fuzzer-surfaced): domain errors.** `sqrt(-x)`/`log(<=0)`/`ln(<=0)`
-  return NaN/-Infinity in Genie4 (C# Math.*), but our MathEval RAISES (evalmath then rescues to '0').
-  ~140/10k fuzz cases. sqrt/log/ln have ZERO corpus uses, so unreached today; matching would mean
-  returning Float::NAN/-INFINITY and verifying evalmath's NaN FORMATTING equals Genie's. Deferred
-  pending a decision (left strict-raise for now; revisit if a script feeds out-of-domain values).
+- **Domain errors + number FORMATTING now match C#/.NET byte-for-byte (v0.9.5), found by a STRING
+  fuzzer.** The value-fuzzer compared numeric results with tolerance and missed formatting. A second
+  fuzzer (genie-port-lab/reference/fuzz_format.rb) compares the `evalmath` STRING (our
+  `format_double(evaluate)` vs Genie's Command.cs `EvalMath` = `double.ToString()` en-US). It exposed,
+  and we fixed to 0 diffs across 30k exprs: (1) DOMAIN errors -- `sqrt(-x)`/`log(<0)`/asin(|x|>1) now
+  return NaN (rescue Math::DomainError), `log(0)`->-Inf, and floor/ceiling/round pass NaN/Inf through
+  (Ruby's raise -> mirror C#); (2) `^` = C# Math.Pow: NaN for neg-base+fractional-exp (Ruby gives a
+  Complex), but Pow(1,y)==Pow(x,0)==1 even for NaN; (3) format_double rewritten to .NET
+  double.ToString(): U+221E infinity glyph (built via `[0x221E].pack('U')` -- the AsciiOnlySource cop
+  rejects even a \u escape that yields non-ASCII), `-0`, shortest-round-trip digits, fixed-point for
+  leading-digit exponent in [-4,16] else scientific (`1E-05`,`1.2676...E+30`, min-2 exp digits); the
+  old `f.to_i.to_s` emitted EXACT-integer digits (`...912`) not .NET's shortest (`...910`) above 2^53;
+  (4) `\` integer div now truncates toward zero via exact bignum (no float precision loss) and errors
+  on Int64 overflow like Genie's ToLong; (5) IEEE `-0` preserved through floor/ceiling/round/sqrt(-0).
+  LESSON: fuzz the FORMATTED string, not just the numeric value -- float formatting is where the
+  subtle, invisible divergences live, and the oracle makes them byte-verifiable.
 
 ## DR game-state (the big surprises)
 - **`XMLData` is shared GS/DR.** DR-specific state lives in DR modules.

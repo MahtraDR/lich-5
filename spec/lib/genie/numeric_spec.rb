@@ -54,10 +54,24 @@ RSpec.describe Lich::Genie::Numeric do
       expect(described_class.format_double(3.14)).to eq('3.14')
     end
 
-    it 'handles special values .NET-style' do
+    it 'handles special values .NET-style (Unicode infinity, signed zero)' do
+      infinity = [0x221E].pack('U') # U+221E, kept out of source per AsciiOnlySource cop
       expect(described_class.format_double(Float::NAN)).to eq('NaN')
-      expect(described_class.format_double(Float::INFINITY)).to eq('Infinity')
-      expect(described_class.format_double(-Float::INFINITY)).to eq('-Infinity')
+      expect(described_class.format_double(Float::INFINITY)).to eq(infinity)
+      expect(described_class.format_double(-Float::INFINITY)).to eq("-#{infinity}")
+      expect(described_class.format_double(-0.0)).to eq('-0')
+    end
+
+    # Byte-exact with .NET double.ToString(), verified via the Genie4 differential fuzzer
+    # (genie-port-lab/reference/fuzz_format.rb): fixed-point for exponent in [-4, 16],
+    # scientific otherwise, shortest round-trip digits throughout.
+    it 'matches .NET formatting at magnitude boundaries' do
+      expect(described_class.format_double(1e16)).to eq('10000000000000000')  # fixed
+      expect(described_class.format_double(1e17)).to eq('1E+17')              # -> scientific
+      expect(described_class.format_double(1e-4)).to eq('0.0001')            # fixed
+      expect(described_class.format_double(1e-5)).to eq('1E-05')             # -> scientific
+      expect(described_class.format_double(8.7**18)).to eq('81535464022366910') # shortest, not exact-int
+      expect(described_class.format_double(22.0 / 7)).to eq('3.142857142857143')
     end
   end
 end
