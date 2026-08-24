@@ -527,6 +527,22 @@ action clear                         # remove all actions
 action remove you are knocked to the ground   # remove one by its pattern
 ```
 
+**Action classes — grouping actions you can switch on and off.** Put a name in parentheses to
+assign an action to a *class*, then toggle the whole group at once:
+
+```
+action (mapper) goto RETRY when You can't climb that     # define, scoped to class "mapper"
+action (mapper) goto FAILED when the path is blocked
+action (mapper) off                                      # both mapper actions stop firing
+action (mapper) on                                       # ...and start again
+```
+
+Classes start **on**, so an action fires as soon as you define it. `off`/`on` also accept
+`0`/`1`/`true`/`false`/`activate`/`inactivate`. A common pattern is for an action to switch its own
+class off once it has done its job (`action (loop) …; action (loop) off when …`). Note these action
+classes are separate from the `#class` used by triggers — you turn action classes on and off with
+`action (name) on|off`, not `#class`.
+
 ---
 
 ## 11. Effects and triggers: `#` commands

@@ -171,6 +171,68 @@ RSpec.describe Lich::Genie::Interpreter do
     end
   end
 
+  describe 'class-scoped actions' do
+    # Defines a class-scoped action that sets %hits when it fires, waits (so input can
+    # trigger it), then echoes %hits. When the action is suppressed %hits stays literal.
+    def watch_result(setup)
+      source = <<~GENIE
+        #{setup}
+        match ok all clear
+        matchwait 1
+        echo hits=%hits
+        exit
+      GENIE
+      run_script(source, input_lines: ['ping'])[:echoes]
+    end
+
+    it 'fires a class-scoped action while its class is on (the default)' do
+      expect(watch_result('action (watch) var hits fired when ^ping')).to eq(['hits=fired'])
+    end
+
+    it 'does not fire after action (class) off' do
+      expect(watch_result("action (watch) var hits fired when ^ping\naction (watch) off")).to eq(['hits=%hits'])
+    end
+
+    it 'starts inactive when defined while its class is already off' do
+      expect(watch_result("action (watch) off\naction (watch) var hits fired when ^ping")).to eq(['hits=%hits'])
+    end
+
+    it 're-enables with action (class) on' do
+      setup = "action (watch) var hits fired when ^ping\naction (watch) off\naction (watch) on"
+      expect(watch_result(setup)).to eq(['hits=fired'])
+    end
+
+    it 'accepts on/off synonyms (false then 1)' do
+      setup = "action (watch) var hits fired when ^ping\naction (watch) false\naction (watch) 1"
+      expect(watch_result(setup)).to eq(['hits=fired'])
+    end
+
+    it 'leaves other classes unaffected when one is toggled' do
+      source = <<~GENIE
+        action (a) var ha yes when ^ping
+        action (b) var hb yes when ^ping
+        action (a) off
+        match ok all clear
+        matchwait 1
+        echo a=%ha b=%hb
+        exit
+      GENIE
+      expect(run_script(source, input_lines: ['ping'])[:echoes]).to eq(['a=%ha b=yes'])
+    end
+
+    it 'lets a firing action disable its own class (the mapper idiom)' do
+      source = <<~GENIE
+        action (loop) var last $1;action (loop) off when ^ping(\\d)
+        match ok all clear
+        matchwait 1
+        echo last=%last
+        exit
+      GENIE
+      # First ping fires (last=1) then turns the class off; the second must not fire.
+      expect(run_script(source, input_lines: %w[ping1 ping2])[:echoes]).to eq(['last=1'])
+    end
+  end
+
   describe 'reserved game-state globals' do
     it 'resolves $globals from the injected game state' do
       source = <<~GENIE

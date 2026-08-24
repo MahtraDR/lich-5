@@ -73,6 +73,7 @@ module Lich
         @state = :running
         @match_list = []
         @actions = []
+        @action_classes = {} # script-local action-class on/off state (Genie ClassActionList)
         @send_history = []
         @action_jumped = false
         seed_args(args)
@@ -523,12 +524,26 @@ module Lich
 
       # --- actions (basic, prototype) --------------------------------------
 
+      # `action [(class)] [add|instant] {commands} when {regex}` | `action (class) on|off`
+      # | `action clear` | `action remove {regex}` (Script.cs EvalAction). A leading
+      # `(class)` either TOGGLES that action-class (on/off/true/false/1/0/activate/
+      # inactivate) or scopes a new action to it. Action classes are a SCRIPT-LOCAL
+      # namespace toggled ONLY by `action (class) on/off` -- independent of `#class`
+      # (Genie keeps them in ClassActionList, separate from the front-end class list).
       def do_action(raw)
         text = raw.strip
-        keyword = Text.keyword_string(text).downcase
-        instant = false
+        klass = nil
+        if text.start_with?('(') && (close = text.index(')'))
+          klass = text[1...close].downcase.strip
+          text = text[(close + 1)..].to_s.strip
+          case Text.keyword_string(text).downcase
+          when '0', 'off', 'false', 'inactivate' then return set_action_class(klass, false)
+          when '1', 'on', 'true', 'activate' then return set_action_class(klass, true)
+          end
+        end
 
-        case keyword
+        instant = false
+        case Text.keyword_string(text).downcase
         when 'clear'
           @actions = []
           return
@@ -536,14 +551,9 @@ module Lich
           removed = Text.argument_string(text).strip
           @actions.reject! { |action| action[:source] == removed }
           return
-        when 'add'
-          text = Text.argument_string(text)
-        when 'instant'
-          instant = true
-          text = Text.argument_string(text)
+        when 'add' then text = Text.argument_string(text)
+        when 'instant' then instant = true; text = Text.argument_string(text)
         end
-
-        return if text.start_with?('(') # (class) on/off toggle -- deferred (front-end gating)
 
         commands, trigger = text.split(/\s+when\s+/i, 2)
         return if trigger.nil? || trigger.empty?
@@ -554,7 +564,18 @@ module Lich
           echo_line("[Genie: invalid action trigger regex: #{trigger}]")
           return
         end
-        @actions << { trigger: regex, source: trigger, commands: commands, active: true, instant: instant }
+        # A new action inherits its class's current state; a never-seen class registers ON.
+        active = klass.nil? || @action_classes.fetch(klass, true)
+        @action_classes[klass] = true if klass && !@action_classes.key?(klass)
+        @actions << { trigger: regex, source: trigger, commands: commands, active: active, instant: instant, klass: klass }
+      end
+
+      # Toggle an action-class and flip IsActive on every action already in it (Genie
+      # ClassActionList.SetClass). @return [nil] (do_action returns this; caller ignores).
+      def set_action_class(name, status)
+        @action_classes[name] = status
+        @actions.each { |action| action[:active] = status if action[:klass] == name }
+        nil
       end
 
       def fire_actions(line)
@@ -594,6 +615,7 @@ module Lich
           when 'setvariable', 'var' then local_set(Text.keyword_string(argument), Text.argument_string(argument))
           when 'js' then run_js(substitute(argument))
           when 'jscall' then run_jscall(substitute(argument))
+          when 'action' then do_action(substitute(argument))
           else send_text(substitute(command))
           end
         end

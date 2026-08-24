@@ -314,8 +314,25 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   compare (findMinIndex even returns the value) -- unused by any real script, so we implement the
   documented NUMERIC intent. Unknown js funcs + `#plugin`/`#pluginscript` now ANNOUNCE (echo a
   `[Genie: ... not supported ...]`) instead of silently no-op'ing. STILL a gap: class-scoped
-  actions (`action (class) js ...`) are deferred by `do_action`, so mm_train's `js doPush` inside
-  `action (pouchcheck)` never registers -- separate roadmap item (action/gag/sub class-gating).
+  actions (`action (class) js ...`) are deferred by `do_action` [FIXED v0.9.3, below].
+
+- **Class-scoped actions: implement them, don't defer -- and their class store is SCRIPT-LOCAL,
+  NOT `#class` (v0.9.3).** `do_action` used to `return if text.start_with?('(')`, silently dropping
+  every `action (class) ... when ...`. Genie's `action` verb (Script.cs EvalAction + ClassActionList)
+  supports: `action (class) on|off|1|0|true|false|activate|inactivate` to TOGGLE a class, and
+  `action (class) {cmds} when {re}` to scope a new action to it. CRITICAL faithful detail: action
+  classes live in a per-script `ClassActionList.ClassList`, toggled ONLY by `action (class) on/off`
+  -- they are INDEPENDENT of the front-end `#class` list (verified in the corpus: 0 scripts toggle an
+  action-class via `#class`; all use `action (mapper) on/off` etc.). So the fix is entirely
+  interpreter-local -- a `@action_classes` hash, no Lich glue/port needed. Semantics ported exactly:
+  a new action inherits its class's current state; a never-seen class registers ON; `set_action_class`
+  flips `active` on all actions already in the class. Also route `action` inside `execute_action` so a
+  FIRING action can toggle its own class (the mapper idiom `... ;action (mapper) off`). No eval-actions
+  (`action e/...`/variable-change triggers) exist in the corpus -- deferred. Verified: real
+  automapper.cmd (116 action lines) compiles 0-warning and an off->on toggle gates firing e2e.
+  Remaining action-body gaps (pre-existing, NOT class-scoping): `execute_action` still doesn't handle
+  `if`/`math`/`shift` command bodies (1 `if` case in the corpus) -- those fall through to the game;
+  next item if it bites.
 
 ## DR game-state (the big surprises)
 - **`XMLData` is shared GS/DR.** DR-specific state lives in DR modules.
