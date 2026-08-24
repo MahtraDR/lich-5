@@ -15,10 +15,14 @@ genuinely need a tester are quarantined at the bottom. Keep this updated as we g
 
 ## P1 — Parity tests we can build now (oracle-backed, high value)
 
-- [ ] **`Utility.ParseArgs` oracle + fuzzer.** Genie's brace/quote arg grouping drives
-      `#trigger`/`#class`/command dispatch. `Utility.cs` is WinForms-free -> add a `parseargs`
-      mode to the oracle, fuzz brace/quote/nested strings vs our `Text.parse_args`. Highest
-      remaining evaluator-layer surface.
+- [x] **`Utility.ParseArgs` oracle + fuzzer. DONE v0.9.6.** Extracted ParseArgs+AddArrayItem
+      verbatim into oracle `Shims.cs`; added `parseargs`/`parseargs_` modes (serialize as
+      `<count>\x1f<tok>...`); `reference/fuzz_parseargs.rb` fuzzes brace/quote/escape/underscore.
+      Found the char-buffer `Text.parse_args` was wrong ~6 ways (dropped `\`, dropped interior/
+      unbalanced quotes, no single-quote strip, brace-as-buffer not token-boundary, split on TAB,
+      never threw) -> REWROTE as a faithful substring port (keeps quirks: negative depth, quotes
+      active inside braces, lone-quote THROW, underscore-gates-first-token). 40k cases x2 modes,
+      0 divergences; 16 regressions in text_spec.rb. See lessons-learned.md.
 - [ ] **`StringToDouble` / `ToInteger` / `ToLong` fuzzer.** Number parsing + banker's-rounding
       edges (thousands separators, leading/trailing junk, signs). `Utility.cs` includable;
       add oracle modes and fuzz vs `Numeric.*`.

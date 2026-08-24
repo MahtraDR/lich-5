@@ -73,60 +73,117 @@ module Lich
         parts
       end
 
-      # Port of Utility.ParseArgs: split on whitespace while honoring "..." quoted
-      # strings (quotes stripped), {...} brace groups (outer braces stripped, inner
-      # kept, an empty {} yields an empty token), and \ escapes.
+      # Port of Utility.ParseArgs (Utility.cs:390): split a command line into an
+      # argument list on ' ' spaces, honoring "..." quoted strings and {...} brace
+      # groups so a space inside either is not a split point. This is a FAITHFUL
+      # port of the C# algorithm, which is subtler than it looks -- it slices the
+      # source with a start pointer rather than accumulating a char buffer, so:
+      #
+      #   * A `\` escape makes the NEXT char non-special (it won't open a quote/brace
+      #     or split) but BOTH the backslash and the escaped char stay in the token
+      #     verbatim: `a\ b` -> ["a\ b"], NOT ["a b"].
+      #   * Only `"` toggles quoting inside the loop; a backslash inside a quoted run
+      #     is a plain char (no escaping there). Interior/unbalanced quotes are KEPT
+      #     in the token: `a"b"c` -> ['a"b"c'], `"hello` -> ['"hello'].
+      #   * A brace boundary is a TOKEN boundary like a space, even without a space:
+      #     `x{y}z` -> ["x", "y", "z"]. Outer braces are stripped, inner kept; `{}`
+      #     yields one empty token. A `}` decrements depth even below zero, so a
+      #     stray `}` makes later spaces stop splitting (`a}b c` -> ["a}b c"]).
+      #   * Wrapping quotes are stripped only if BOTH ends match, and BOTH `"..."`
+      #     and '...' are stripped (single quotes only here, not in the loop). A
+      #     token that is a lone `"` or `'` makes Genie THROW (its AddArrayItem does
+      #     Substring(1, len-2), i.e. length -1) -- we replicate the throw.
+      #   * The bTreatUnderscoreAsSpace flag replaces `_`->` ` in every token EXCEPT
+      #     the first (Genie gates it on oList.Count > 0).
       #
       # @param str [String]
+      # @param treat_underscore_as_space [Boolean]
       # @return [Array<String>]
-      def parse_args(str)
+      # @raise [Error] on a malformed argument string (matches Genie's rethrow)
+      def parse_args(str, treat_underscore_as_space: false)
         s = str.to_s
-        tokens = []
-        buffer = +''
-        started = false
-        in_quote = false
-        brace_depth = 0
-        i = 0
-
-        while i < s.length
-          ch = s[i]
-          if ch == '\\' && i + 1 < s.length
-            buffer << s[i + 1]
-            started = true
-            i += 2
-            next
-          elsif in_quote
-            ch == '"' ? (in_quote = false) : (buffer << ch)
-          elsif brace_depth.positive?
-            if ch == '{'
-              brace_depth += 1
-              buffer << ch
+        list = []
+        begin
+          inside_string = false
+          string_char = nil
+          bracket_depth = 0
+          escape = false
+          sp = 0
+          cp = 0
+          len = s.length
+          while cp < len
+            ch = s[cp]
+            if escape
+              escape = false
+            elsif inside_string
+              inside_string = false if ch == string_char
+            elsif ch == '"'
+              inside_string = true
+              string_char = ch
+            elsif ch == '{'
+              if bracket_depth.zero?
+                l = cp - sp
+                add_array_item(list, s[sp, l], treat_underscore_as_space) if l.positive?
+                sp = cp
+              end
+              bracket_depth += 1
             elsif ch == '}'
-              brace_depth -= 1
-              buffer << ch if brace_depth.positive?
-            else
-              buffer << ch
+              bracket_depth -= 1
+              if bracket_depth.zero?
+                l = cp - sp
+                if l.positive?
+                  add_array_item(list, s[sp + 1, l - 1], treat_underscore_as_space)
+                else
+                  add_array_item(list, '')
+                end
+                sp = cp + 1
+              end
+            elsif ch == ' '
+              if bracket_depth.zero?
+                l = cp - sp
+                add_array_item(list, s[sp, l], treat_underscore_as_space) if l.positive?
+                sp = cp + 1
+              end
+            elsif ch == '\\'
+              escape = true
             end
-          elsif ch == '"'
-            in_quote = true
-            started = true
-          elsif ch == '{'
-            brace_depth = 1
-            started = true
-          elsif ch == ' ' || ch == "\t"
-            if started
-              tokens << buffer
-              buffer = +''
-              started = false
-            end
-          else
-            buffer << ch
-            started = true
+            cp += 1
           end
-          i += 1
+          l = len - sp
+          add_array_item(list, s[sp, l], treat_underscore_as_space) if l.positive?
+        rescue StandardError
+          raise Error, "Invalid string in Parse Arguments: #{s}"
         end
-        tokens << buffer if started
-        tokens
+        list
+      end
+
+      # Port of Utility.AddArrayItem (Utility.cs:494): strip a wrapping "..." then a
+      # wrapping '...' (each only when BOTH ends match), optionally replace `_`->` `,
+      # and append. The underscore flag is honored only when the list is non-empty
+      # (Genie's IIf(oList.Count > 0, flag, false)), so the first token is never
+      # underscore-expanded. Faithfully replicates C#'s Substring(1, len-2), which
+      # THROWS on a lone-quote token (length -1) -- caught + rethrown by parse_args.
+      #
+      # @return [void]
+      def add_array_item(list, text, treat_underscore_as_space = false)
+        text = text.to_s
+        text = csharp_substring(text, 1, text.length - 2) if text.start_with?('"') && text.end_with?('"')
+        text = csharp_substring(text, 1, text.length - 2) if text.start_with?("'") && text.end_with?("'")
+        gate = !list.empty? && treat_underscore_as_space
+        text = text.gsub('_', ' ') if gate && text.include?('_')
+        list << text
+      end
+
+      # Faithful String.Substring(startIndex, length): raises (like C#'s
+      # ArgumentOutOfRangeException) on a negative length or an out-of-range slice,
+      # instead of Ruby's silent nil/clamp. Only reached with startIndex 1 here, so
+      # the trigger is a lone-quote token (length -1).
+      #
+      # @return [String]
+      def csharp_substring(str, start, length)
+        raise ArgumentError, 'substring out of range' if length.negative? || start.negative? || (start + length) > str.length
+
+        str[start, length]
       end
     end
   end

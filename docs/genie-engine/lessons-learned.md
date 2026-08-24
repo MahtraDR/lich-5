@@ -364,6 +364,33 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   on Int64 overflow like Genie's ToLong; (5) IEEE `-0` preserved through floor/ceiling/round/sqrt(-0).
   LESSON: fuzz the FORMATTED string, not just the numeric value -- float formatting is where the
   subtle, invisible divergences live, and the oracle makes them byte-verifiable.
+- **`Text.parse_args` was subtly WRONG in ~6 ways -- caught by a ParseArgs oracle + fuzzer,
+  rewritten to a faithful port (v0.9.6).** `Utility.cs` (ParseArgs + AddArrayItem) is WinForms-free,
+  so we extracted a VERBATIM copy into the oracle's `Shims.cs` (namespace `GenieClient`), added
+  `parseargs`/`parseargs_` modes (serialize the ArrayList as `<count>\x1f<tok>...` -- the leading
+  count keeps `""`=0 tokens distinct from `{}`=one empty token), and fuzzed brace/quote/escape/
+  underscore strings via `genie-port-lab/reference/fuzz_parseargs.rb`. The old char-BUFFER
+  implementation diverged from Genie's start-pointer SUBSTRING algorithm on: (1) it DROPPED
+  backslashes (`a\ b`->`["a b"]`; Genie keeps both: `["a\ b"]` -- the escape only makes the next
+  char non-special, both stay); (2) it DROPPED interior/unbalanced quotes (`a"b"c`->`["abc"]`,
+  `"hello`->`["hello"]`; Genie keeps them: `['a"b"c']`, `['"hello']` -- quotes are stripped only
+  when they WRAP the whole token, via AddArrayItem); (3) no single-quote stripping (`'hello'`->
+  Genie `["hello"]`); (4) it treated a brace as a buffer-append, not a TOKEN BOUNDARY -- `x{y}z`->
+  Genie `["x","y","z"]` (a brace group is always its own token, even with no surrounding space),
+  and it also let a `{` swallow the pending token; (5) it split on TAB (`\t`) -- Genie splits on
+  ASCII space ONLY; (6) it never threw. Genie quirks now replicated: a stray `}` drives depth
+  BELOW zero so later spaces stop splitting (`a}b c`->`["a}b c"]`); a `"` still toggles quoting
+  INSIDE braces (so a `}` inside quotes doesn't close: `{a"}"b}`->`['a"}"b']`); a lone-quote token
+  (`"` or `'`) THROWS -- Genie's AddArrayItem does `Substring(1, len-2)` = length -1 ->
+  ArgumentOutOfRangeException, rethrown as "Invalid string in Parse Arguments"; we replicate with
+  `csharp_substring` raising -> `parse_args` rescues + re-raises `Error` (GenieScript's
+  StandardError rescue keeps the engine stable); `bTreatUnderscoreAsSpace` replaces `_`->` ` in
+  every token EXCEPT the first (Genie gates it on `oList.Count > 0`). Result: 40k fuzz cases x2
+  modes, 0 divergences; 16 regressions in `text_spec.rb`; the whole existing suite stayed green
+  (real callers -- command_router, call_stack, variable_file -- unaffected). LESSON: even a
+  "boring" tokenizer that "looks right" and passes example specs can be wrong in half a dozen
+  ways a char-buffer reimplementation invents; port the ACTUAL algorithm (substring semantics),
+  and let the oracle prove it.
 
 ## DR game-state (the big surprises)
 - **`XMLData` is shared GS/DR.** DR-specific state lives in DR modules.
