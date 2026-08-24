@@ -421,10 +421,49 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   per-environment (the `$SpellTimer.*` model: a Genie plugin fills it natively, we synthesize it).
 - **A Lich script's `respond`/`_respond` reaches native Genie but NOT the in-Lich engine's triggers.**
   `respond` writes to the client (`puts_main_stream`) + `Script.new_script_output` (only scripts with
-  `want_script_output=true`, which GenieScript is not). The in-Lich engine's triggers run on the server
-  `DownstreamHook`; its `matchwait` reads the script `downstream_buffer` (fed by `Script.new_downstream`
-  with the ORIGINAL, pre-hook stripped server line). So to feed the in-Lich engine you push via
-  `Script.new_downstream`; to feed native Genie you write to the client. Different calls, same content.
+  `want_script_output=true`). The in-Lich engine's triggers run on the server `DownstreamHook`; its
+  `matchwait` reads the script `downstream_buffer` (fed by `Script.new_downstream` with the ORIGINAL,
+  pre-hook stripped server line). So to feed the in-Lich engine you push via `Script.new_downstream`;
+  to feed native Genie you write to the client. Different calls, same content.
+- **Making Lich-echoed text matchable in the in-Lich engine (v0.9.7, Tirost's "match what Lich
+  prints back" ask).** Native Genie sees everything Lich writes to the client (go2's "you're already
+  there", "--- Lich: <script> has exited", another script's output), because it IS the client. The
+  in-Lich engine did not: `matchwait` only saw `want_downstream` server lines, and triggers only fired
+  on the server `DownstreamHook`. Two-part fix: (1) **`GenieScript#want_script_output = true`** so
+  `Script.new_script_output` (called by every `respond`/`_respond`) feeds Lich-echoed lines into the
+  script's `downstream_buffer` -> `matchwait`/`matchre` see them. (2) A **single global script-output
+  trigger tap**: prepend a module onto `Lich::Common::Script`'s singleton so `new_script_output` also
+  runs the Genie trigger pipeline ONCE per line (the choke point is global, so no once-per-running-
+  script double-fire), guarded by a per-thread re-entrancy flag (`Thread.current[:genie_in_script_
+  trigger]`) so a trigger action that itself `respond`s can't recurse (`fire`/`apply` are synchronous,
+  so thread-local suffices). WATCH: want_script_output also feeds a Genie script's OWN `echo` (echo
+  verb -> respond) back into its match buffer, which native Genie does not do (it matches the game
+  stream, not its own echo) -- if a working combat script regresses on a self-echo match, this is the
+  lever to revisit.
+- **`put ,name` / `send ,name` now runs a LICH script/command (v0.9.7).** home.cmd's `put ,go2 2572`
+  came back as "Please rephrase that command." -- the interpreter routed `#` to the bar-command router
+  and `.` (SCRIPT_CHAR) to a Genie-script launch, but a leading Lich command char (`,`/`;`) fell
+  through to the game socket. In native-Genie-over-Lich, `,go2` reaches Lich's client-input path
+  (`do_client`), which sees the `,` and dispatches it. Fixed at the `LichGamePort#send_command`
+  boundary (the in-Lich equivalent of "send to Lich's proxy"): a leading `,`/`;` (matched like Lich's
+  own `$lich_char_regex = union(',',';')`) routes to `do_client(text.dup)` -- so `,go2`, `,kill`,
+  `,pause`, `,list`, etc. all work exactly as if typed -- and skips RT pacing (a Lich command is not
+  RT-gated). Everything else still goes through `put`. `.name` still launches a GENIE script; `,name`
+  runs a LICH one.
+- **AssessIds delivery was chunking-fragile -- rewritten line-based (v0.9.7).** The old `observe`
+  block-buffered from `<pushStream id='assess'>` to the FIRST `<popStream>` and processed that slice
+  once. DR's current form sends each assess line as its own `<popStream/><pushStream id="assess"/>...
+  \r\n`; when the server BATCHED the whole block into one chunk, the first-popStream slice dropped
+  every assess line but the first (the "assess ids sometimes don't show up" bug). Rewrote to process
+  the stream LINE BY LINE (split on `\n`, buffer only a trailing partial), tracking inside-assess
+  state across lines via push/pop markers and enriching any assess line that carries a `look #id`
+  link. Proven on Tirost's real raw capture (2026-08-24): the summary line `You (adeptly balanced) are
+  facing <d cmd='look #86948248'>a jeol moradu</d> (3) at melee range.` enriches to exactly what his
+  `^You \(.*?\).*?\[#(\d+)\].*?at.*?range\.` (commonbg.cmd) matches. The "doubled `[#id]`" he saw is
+  two DIFFERENT creatures on one status line ("A jeol moradu [#a] ... is behind a jeol moradu [#b]"),
+  not a true duplicate. DECISION (per user): keep the TEXT-splice approach as the drop-in for his
+  existing regex-matching scripts; do NOT re-render from the parsed `Creature` module (structured data
+  is great for `Creature.targets` queries but re-rendering text would be less faithful to his regexes).
 - **Assess exist-ids: surface them in Lich, don't reinvent them (v0.9.0 `AssessIds` shim).** DR sends
   each creature as `<d cmd='look #NNN'>name</d>` in a `<pushStream id='assess'>..<popStream/>` block
   (Lich already parses this into the `Creature` module). The `[#nnnnn]` scripts match is a FRONT-END

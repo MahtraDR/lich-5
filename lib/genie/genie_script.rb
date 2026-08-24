@@ -39,6 +39,17 @@ module Lich
         @downstream_buffer = LimitedArray.new
         @downstream_buffer.max_size = 400
         @want_downstream = true
+        # Lich-echoed lines (respond/_respond -> Script.new_script_output) reach a
+        # script's match buffer ONLY when want_script_output is set. Enable it so the
+        # Genie engine's matchwait/matchre can match text ECHOED BY LICH -- go2's
+        # "you're already there", "--- Lich: <script> has exited", another script's
+        # output -- not just the raw game stream. (Tirost's foundational ask: Genie
+        # matchtables + triggers matching Lich-echoed text.) The companion piece is the
+        # script-output trigger tap in ensure_downstream_hook!. NOTE/WATCH: this also
+        # feeds a Genie script's OWN echo (echo verb -> respond) into its match buffer,
+        # which native Genie does not do (it matches the game stream, not its own echo);
+        # if a working combat script regresses via a self-echo match, this is the lever.
+        @want_script_output = true
         @want_downstream_xml = false
         @upstream_buffer = LimitedArray.new
         @want_upstream = false
@@ -92,6 +103,19 @@ module Lich
       end
 
       @downstream_installed = false
+      @script_output_tap_installed = false
+
+      # Prepended onto Lich::Common::Script's singleton class so EVERY line Lich
+      # echoes to the client (respond/_respond -> Script.new_script_output) also runs
+      # the Genie trigger pipeline -- the piece that lets #triggers match text ECHOED
+      # BY LICH, not just the raw game stream. Calls super first (the real buffer
+      # fan-out that want_script_output relies on) so matchwait behavior is unchanged.
+      module ScriptOutputTriggerTap
+        def new_script_output(line)
+          super
+          Lich::Genie::GenieScript.fire_script_output_triggers(line)
+        end
+      end
 
       class << self
         # Install (once) the single Lich DownstreamHook that powers Model A gag/sub
@@ -108,6 +132,10 @@ module Lich
           # Self-install the opt-in assess exist-id shim so it survives relogin under
           # the in-Lich engine (native-Genie users install it from autostart instead).
           Lich::Genie::AssessIds.install! if Lich::Genie::AssessIds.enabled?
+          # Fire #triggers on text ECHOED BY LICH too (go2 messages, script-exit
+          # notices, other scripts' output), not just the raw game stream -- the
+          # companion to want_script_output (which does the same for matchwait).
+          install_script_output_trigger_tap!
           runner = trigger_runner
           Lich::Common::DownstreamHook.add('genie-downstream', lambda { |server_string|
             begin
@@ -162,6 +190,44 @@ module Lich
           strip_xml(server_string).to_s
         rescue NameError
           server_string.gsub(/<[^>]+>/, '')
+        end
+
+        # Prepend the script-output trigger tap onto Lich's Script singleton, ONCE.
+        # This is the single global choke point (Script.new_script_output is called
+        # once per Lich-echoed line, regardless of how many genie scripts run), so a
+        # line fires triggers exactly once -- never once-per-running-script.
+        # @return [void]
+        def install_script_output_trigger_tap!
+          return if @script_output_tap_installed
+          return unless defined?(Lich::Common::Script)
+
+          @script_output_tap_installed = true
+          Lich::Common::Script.singleton_class.prepend(ScriptOutputTriggerTap)
+        end
+
+        # Run the Genie trigger pipeline against one Lich-echoed line. Re-entrancy is
+        # guarded PER THREAD: a trigger action that itself echoes (respond ->
+        # new_script_output -> here) must not recurse. fire/apply are synchronous, so
+        # a thread-local flag is sufficient. Never raises into the respond path.
+        # @param line [String]
+        # @return [void]
+        def fire_script_output_triggers(line)
+          return if Thread.current[:genie_in_script_trigger]
+
+          Thread.current[:genie_in_script_trigger] = true
+          begin
+            text = strip_xml_line(line).to_s.strip
+            return if text.empty?
+
+            runner = trigger_runner
+            Lich::Genie.triggers.apply(text) do |commands, captures|
+              runner.fire(commands, captures)
+            end
+          ensure
+            Thread.current[:genie_in_script_trigger] = false
+          end
+        rescue StandardError => e
+          respond "--- Lich: genie script-output trigger error: #{e}"
         end
 
         # Global-scoped runner that executes trigger actions (shared global store, so
@@ -332,12 +398,37 @@ module Lich
     # Sends a Genie command to the game via Lich's `put` (echo + prefix + send).
     # Pacing/broker mediation will be layered here per design Decision 5.
     class LichGamePort
+      # A Lich command char (`,` or `;`) at the very start of the command -- what a
+      # user types to run a Lich script/command (`,go2 123`, `,kill sc`). Matches the
+      # same set as Lich's own client-input path ($lich_char_regex = union(',',';')).
+      LICH_COMMAND = /\A(?:<c>)?[,;]\S/
+
       # Wait out any active roundtime before sending (Genie paces on RT, so scripts
       # don't spam a command during RT and hit the "...wait N seconds" retry loop).
       # waitrt? returns immediately when there's no RT.
+      #
+      # A leading `,`/`;` is NOT a game command -- it is a Lich command (script launch,
+      # kill/pause/list, etc.). In native-Genie-over-Lich, `put ,go2 123` reaches
+      # Lich's client-input path (do_client), which sees the `,` and dispatches it; a
+      # plain `put` would send it to the GAME instead (the "Please rephrase that
+      # command" bug from home.cmd). So route those through do_client exactly as if the
+      # user had typed them -- and skip RT pacing (a Lich command is not RT-gated).
       def send_command(text)
+        return dispatch_lich_command(text) if text.to_s.lstrip =~ LICH_COMMAND
+
         waitrt?
         put(text)
+      end
+
+      private
+
+      def dispatch_lich_command(text)
+        # do_client mutates (strip!) and expects the command WITH its leading char;
+        # pass a dup so a frozen/shared string is never mutated. do_client is a
+        # top-level Lich def (private on Object) -- callable with an implicit receiver.
+        do_client(text.to_s.lstrip.dup)
+      rescue StandardError => e
+        respond "--- Lich: genie could not run Lich command '#{text}': #{e}"
       end
     end
 

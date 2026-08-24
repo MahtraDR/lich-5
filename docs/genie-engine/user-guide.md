@@ -952,6 +952,27 @@ script. The launched script runs alongside yours (it doesn't pause the caller).
 > Ordinary commands are unaffected — `put attack kobold` still goes to the game. Only a leading `.`
 > means "launch a script."
 
+#### Running a **Lich** script or command (`,name` / `;name`)
+
+A command that begins with a **Lich command character** (`,` or `;`) is run by **Lich**, exactly as
+if you had typed it into your client — so you can launch a Lich `.lic` script (like `go2`) or use any
+Lich command from inside a Genie script:
+
+```
+put ,go2 2572         # walk to room 2572 via Lich's go2  (send ,go2 2572 works too)
+put ;kill mapper      # any Lich command works: kill/pause/list/…
+```
+
+This is the counterpart to the `.` launcher above: `.name` launches a **Genie** script; `,name` /
+`;name` runs a **Lich** script or command. (Both `,` and `;` are accepted regardless of which one
+your front-end uses.) Previously these were sent to the game by mistake — `,go2 2572` came back as
+*"Please rephrase that command."*
+
+> **Matching what Lich prints back.** Text that **Lich** echoes — go2's *"You're already there,"* a
+> *"--- Lich: &lt;script&gt; has exited"* notice, or output from another script — is now visible to
+> your `matchwait`/`matchre` **and** your `#trigger`s, just like game text. So you can `matchre Done
+> You're already there` after a `put ,go2 …` and it will fire.
+
 Example script that uses arguments:
 
 ```

@@ -57,36 +57,56 @@ RSpec.describe Lich::Genie::AssessIds do
     end
   end
 
-  describe '.observe (assess block state machine)' do
+  describe '.observe (line-based, chunking-robust)' do
     before { described_class.install! } # arms @active (no DownstreamHook headless)
 
-    it 'emits enriched lines once, on the block-closing popStream' do
-      delivered = []
-      allow(described_class).to receive(:deliver) { |lines| delivered.concat(lines) }
+    after { described_class.instance_variable_set(:@in_assess, nil) }
 
-      # No popStream yet -> nothing delivered.
-      described_class.observe("<pushStream id='assess'/>You (bal) are facing " \
-                              "<d cmd='look #11'>a foo</d> (1) at melee range.\r\n")
-      expect(delivered).to be_empty
-
-      # Second chunk closes the block -> deliver the accumulated creatures.
-      described_class.observe("<d cmd='look #22'>A bar</d> (2) is behind you at " \
-                              "pole weapon range.\r\n<popStream/>")
-      expect(delivered.length).to eq(2)
-      expect(delivered[0][commonbg_target, 1]).to eq('11')
-      expect(delivered[1]).to include('A bar [#22]')
+    # DR's current form: each assess line is its own <popStream/><pushStream
+    # id="assess"/>...\r\n. Real capture from Tirost (2026-08-24).
+    let(:per_line) do
+      [
+        %(<popStream/><pushStream id="assess"/>You (adeptly balanced) are facing ) +
+          %(<d cmd='look #86948248'>a jeol moradu</d> (3) at melee range.\r\n),
+        %(<popStream/><pushStream id="assess"/><d cmd='look #86947613'>A jeol moradu</d> ) +
+          %{(1: friendly, cursed, and off balance) is behind } +
+          %(<d cmd='look #86948982'>a jeol moradu</d> (5) at melee range.  | ) +
+          %(<d cmd='face #86947613'>F</d>  | <d cmd='face #86948982'>F</d>\r\n),
+        %(<popStream/><pushStream id="assess"/><d cmd='look #86948248'>A jeol moradu</d> ) +
+          %((3: nimbly balanced) is facing you at melee range.  | <d cmd='face #86948248'>F</d>\r\n)
+      ]
     end
 
-    it 'ignores non-assess stream traffic' do
+    it 'enriches every assess line when each arrives in its own chunk' do
+      delivered = []
+      allow(described_class).to receive(:deliver) { |lines| delivered.concat(lines) }
+      per_line.each { |chunk| described_class.observe(chunk) }
+      expect(delivered.length).to eq(3)
+      expect(delivered[0][commonbg_target, 1]).to eq('86948248') # the target line
+      expect(delivered[1]).to include('A jeol moradu [#86947613]').and include('a jeol moradu [#86948982]')
+      expect(delivered[2]).to include('A jeol moradu [#86948248]')
+    end
+
+    it 'enriches every assess line when the whole block arrives in ONE chunk' do
+      # The regression: the old block-buffer dropped all but the first line here.
+      delivered = []
+      allow(described_class).to receive(:deliver) { |lines| delivered.concat(lines) }
+      described_class.observe(per_line.join)
+      expect(delivered.length).to eq(3)
+      expect(delivered[0][commonbg_target, 1]).to eq('86948248')
+      expect(delivered[2]).to include('A jeol moradu [#86948248]')
+    end
+
+    it 'ignores a look-tagged line outside the assess stream' do
       allow(described_class).to receive(:deliver)
-      described_class.observe('An elder Adan\'f sorcerer swings at you.')
+      described_class.observe("You glance at <d cmd='look #99'>a rock</d> here.\r\n")
       expect(described_class).not_to have_received(:deliver)
     end
 
     it 'is inert when not armed' do
       described_class.instance_variable_set(:@active, false)
       allow(described_class).to receive(:deliver)
-      described_class.observe("<pushStream id='assess'/><d cmd='look #1'>a foo</d> (1) is behind you at melee range.<popStream/>")
+      described_class.observe("<pushStream id='assess'/><d cmd='look #1'>a foo</d> (1) is behind you at melee range.\r\n")
       expect(described_class).not_to have_received(:deliver)
     end
   end

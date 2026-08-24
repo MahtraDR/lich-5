@@ -27,8 +27,12 @@ module Lich
       # The ASSESS creature link: `<d cmd='look #NNN'>display name</d>` (single or
       # double quotes; `-?\d+` matches DR's id form). The captured group 1 is the id.
       LOOK_TAG = %r{<d\s+cmd=['"]look #(-?\d+)['"][^>]*>.*?</d>}i
-      ASSESS_OPEN = /<pushStream id=['"]assess['"]/
-      POP = /<popStream/
+      # A pushStream/popStream marker, capturing the kind and its attributes so we
+      # can track whether we are inside the 'assess' combat stream across lines.
+      STREAM_MARKER = %r{<(push|pop)Stream\b([^>]*)/?>}i
+      # Cap the partial-line buffer so a (pathological) newline-less chunk can't grow
+      # it without bound; we only ever need to hold one incomplete trailing line.
+      MAX_PARTIAL = 8192
 
       module_function
 
@@ -99,29 +103,54 @@ module Lich
 
       # --- stream observation ----------------------------------------------
 
-      # Accumulate an assess block across chunks; on its closing popStream, emit the
-      # enriched creature lines. Never raises into the hook chain.
+      # Observe the game stream and, for each COMPLETE line that belongs to the
+      # 'assess' combat stream and carries a creature link, deliver an enriched copy
+      # with the exist-id spliced into the visible text.
+      #
+      # Processes the stream LINE BY LINE (splitting on newlines, buffering only a
+      # trailing partial line) so it is robust to however the server chunks the data:
+      # whether DR sends each assess line in its own push
+      # (`<popStream/><pushStream id="assess"/>...\r\n` per line, its current form) OR
+      # batches the whole block into one chunk. The earlier block-buffered version
+      # truncated at the FIRST popStream and silently dropped every assess line but
+      # the first in the batched case -- the "assess ids sometimes don't show up" bug.
+      # Never raises into the hook chain.
+      #
       # @param server_string [String]
       # @return [void]
       def observe(server_string)
         return unless @active
 
-        chunk = server_string.to_s
-        @buffer = if @buffer
-                    @buffer + chunk
-                  elsif chunk =~ ASSESS_OPEN
-                    chunk
-                  end
-        return if @buffer.nil? || !(@buffer =~ POP)
-
-        open_at = @buffer =~ ASSESS_OPEN
-        segment = open_at ? @buffer[open_at..] : @buffer
-        block = segment[/\A.*?<popStream[^>]*>/m] || segment
-        @buffer = nil
-        deliver(enrich_block(block))
+        @buffer = "#{@buffer}#{server_string}"
+        while (nl = @buffer.index("\n"))
+          line = @buffer.slice!(0..nl)
+          handle_stream_line(line)
+        end
+        # Only ever need to hold one incomplete trailing line; guard against growth.
+        @buffer = @buffer[-MAX_PARTIAL..] if @buffer.length > MAX_PARTIAL
       rescue StandardError => e
         @buffer = nil
         safe_respond("--- Lich: genie assess-ids error: #{e}")
+      end
+
+      # Update the inside-assess-stream state from any push/pop markers in this line
+      # (a stream can open on one line and its content continue), then enrich + deliver
+      # the line's creature link when the line is within the assess stream. `enrich`
+      # returns nil unless the line actually carries a `look #id` link, so a lingering
+      # assess state can never enrich unrelated traffic.
+      #
+      # @param line [String]
+      # @return [void]
+      def handle_stream_line(line)
+        in_assess = @in_assess
+        line.scan(STREAM_MARKER).each do |kind, attrs|
+          @in_assess = kind.casecmp('push').zero? && attrs =~ /id=['"]assess['"]/ ? true : false
+          in_assess ||= @in_assess
+        end
+        return unless in_assess
+
+        enriched = enrich(line)
+        deliver([enriched]) if enriched
       end
 
       # Deliver enriched lines to whichever match channel this environment uses:
