@@ -617,6 +617,17 @@ put #unsub a fierce creature
 > Patterns are treated as regular expressions. `put #gag ^You see nothing` hides only lines that
 > *start* with "You see nothing".
 
+Gags and substitutions can belong to a **class**, and `#class` turns them off/on just like it does
+for triggers — so you can silence a whole group of filters at once:
+
+```
+put #gag {a small bird flies past} {ambience}   # a gag in the "ambience" class
+put #class ambience off                          # ...stop hiding it
+put #class ambience on                           # ...hide it again
+```
+
+A gag/sub with no class is always active.
+
 ### Group B — Display effects: highlights, macros, windows, sounds…
 
 These change how the game *looks or sounds*. Lich announces them in a **universal format** that any

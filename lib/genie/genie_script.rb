@@ -460,6 +460,7 @@ module Lich
         when 'untrigger' then Lich::Genie.triggers.remove(payload['pattern'])
         when 'class'
           Lich::Genie.triggers.set_class(payload['name'], payload['enabled'])
+          Lich::Genie.stream_filters.set_class(payload['name'], payload['enabled']) # gag/sub honor #class too
           emit_tag(op, payload) # front-ends still need class state for highlight gating
         else emit_tag(op, payload)
         end

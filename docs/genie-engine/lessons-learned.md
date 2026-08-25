@@ -503,6 +503,16 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   filtered `visible_moons` helper, to match TimeTracker's plain "isUp". LESSON: match the host's
   fallback semantics by returning nil (absent) vs a concrete value (known) -- the layered lookup
   already does the right thing if each layer reports "I don't know" honestly.
+- **gag/sub class-gating (v0.10.2).** Stream filters now honor `#class on/off` like triggers --
+  mirrored Triggers exactly (an `active` flag defaulting true, a `set_class(name, enabled)` that
+  toggles by case-insensitive class match, `apply` filters on `active`), and wired the SAME `#class`
+  hook (LichHookSink) that already toggled triggers to also call `stream_filters.set_class`. KEY
+  distinction to keep straight: `#class` gates gags/subs/triggers/highlights (Genie's shared
+  ClassList in Globals.cs), but ACTION classes are a SEPARATE script-local store toggled ONLY by
+  `action (name) on/off` (v0.9.3) -- so this change touches the #class path, NOT the action path.
+  LESSON: when three registries should share a cross-cutting toggle, gate them at the ONE hook that
+  already fires for it rather than re-deriving class state in each -- triggers had the pattern, the
+  gap was just that gag/sub weren't subscribed to the same signal.
 
 ## DR game-state (the big surprises)
 - **`XMLData` is shared GS/DR.** DR-specific state lives in DR modules.

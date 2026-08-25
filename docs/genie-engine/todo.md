@@ -143,8 +143,13 @@ genuinely need a tester are quarantined at the bottom. Keep this updated as we g
       (were 4 skipping) and pass: 0 unknown-command warnings across sc/spellbook/uber/uberwatch/
       mastercraft/mc_include/MC_Setup/hunt/gh_setup.
 - [ ] **`.cfg` importer.** Migrate a real Genie `variables.cfg`/config tree (partial today).
-- [ ] **gag/sub class-gating.** Stream filters don't yet honor `#class` on/off (triggers +
-      actions do).
+- [x] **gag/sub class-gating -> DONE v0.10.2.** Stream filters now honor `#class` on/off exactly
+      like triggers: Gag/Sub carry an `active` flag (default true), `StreamFilters#set_class(name,
+      enabled)` toggles filters whose class matches (case-insensitive), and `apply` only runs ACTIVE
+      filters. Wired via LichHookSink's `class` hook, alongside `triggers.set_class`. A no-class
+      filter is never gated; one added while its class is off is still created active (Genie ctor
+      default). NOTE distinct from ACTION classes (script-local, `action (name) on/off`) -- gag/sub/
+      trigger classes are the shared #class ClassList. 5 stream_filters_spec examples; user-guide 11.
 - [ ] **RT pacing via command broker (Decision 5).** Currently paced Genie-internally via
       `waitrt?`; broker integration is aspirational.
 
