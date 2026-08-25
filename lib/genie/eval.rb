@@ -17,11 +17,17 @@ module Lich
     # capture groups accumulate in #result_list for the caller to copy into $0..$n.
     #
     # regex-parity: matchre/replacere are validated byte-for-byte against Genie's real
-    #   Eval.cs (which uses DEFAULT .NET RegexOptions) via the fuzz_regex.rb oracle --
-    #   0 divergences incl. capture groups. KNOWN untested edge: .NET's \d\w\s are
-    #   Unicode-aware and its ^ $ anchor only string start/end, whereas Ruby's are
-    #   ASCII / line-anchored; scripts feeding non-ASCII or embedded-newline subjects to
-    #   matchre/replacere could diverge. Revisit with a Unicode/newline corpus if it bites.
+    #   Eval.cs (DEFAULT .NET RegexOptions) via the fuzz_regex.rb oracle -- 0 divergences
+    #   incl. capture groups, on ASCII subjects. KNOWN, MEASURED divergence on NON-ASCII
+    #   input (fuzz_regex_unicode.rb, ~74-83% match on a deliberately non-ASCII corpus):
+    #   Ruby regex semantics differ from .NET's here -- \d\w\s\D\W\S are ASCII (not
+    #   Unicode), Ruby supports POSIX [[:alpha:]] classes (.NET doesn't), and ^ $ are
+    #   line-anchored (.NET default = whole-string). LEFT AS-IS (Ruby-native): DR game
+    #   text is ASCII so this never fires in practice; matching .NET would need an
+    #   invasive pattern rewrite that can't cleanly reach parity (negated-shorthand in a
+    #   char class, POSIX classes) for zero real benefit -- same call as the substr/
+    #   ToInteger leniency. Multiline is moot: a Genie "..." literal can't hold a raw
+    #   newline and game lines arrive one per line, so a multi-line subject can't occur.
     class Eval
       SEPARATORS = "!=<>,&|"
 

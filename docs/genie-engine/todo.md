@@ -128,10 +128,16 @@ genuinely need a tester are quarantined at the bottom. Keep this updated as we g
       the replacement between every char). Left lenient, matching the substr-out-of-range + count
       decisions -- and faithfully raising is awkward anyway (eval_string's `rescue Error` would
       swallow it to ""). fuzz_regex reports it every run so it stays visible.
-- [ ] **matchre/replacere Unicode + multiline (v0.9.9).** Validated byte-for-byte vs Genie for
-      ASCII, newline-free subjects. UNTESTED: .NET `\d\w\s` are Unicode-aware and its `^ $` anchor
-      only string start/end, vs Ruby's ASCII / line-anchored. A non-ASCII or embedded-newline
-      subject to matchre/replacere could diverge -- revisit with a Unicode/newline corpus if it bites.
+- [x] **matchre/replacere Unicode + multiline -> MEASURED + DOCUMENTED v0.10.3 (leave as-is).**
+      `reference/fuzz_regex_unicode.rb` quantified it: on a deliberately non-ASCII corpus, matchre
+      ~83% / caps ~74% / replacere ~69% match. The divergence surface: Ruby `\d\w\s\D\W\S` are ASCII
+      (not Unicode like .NET), Ruby supports POSIX `[[:alpha:]]` (.NET doesn't), and Ruby `^ $` are
+      line-anchored (.NET default = whole-string). DECISION: leave Ruby-native. DR game text is ASCII
+      so it never fires; reaching parity would need an invasive pattern-source rewrite that can't
+      cleanly hit 0 anyway (negated shorthand in a char class, POSIX classes) -- and would DEGRADE
+      Ruby (drop `[[:alpha:]]`) for zero real benefit (same reasoning as substr/ToInteger leniency).
+      Multiline is MOOT: a Genie `"..."` literal can't contain a raw newline and game lines arrive
+      one per line, so a multi-line subject can't occur. The fuzzer stays as a guard/quantifier.
 - [ ] **`count(s, "")` (empty needle).** INFINITE LOOP in Genie4's own Eval.cs (hangs the
       oracle); ours returns cleanly. A Genie bug — decision: do NOT replicate (leave documented).
 

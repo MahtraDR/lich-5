@@ -513,6 +513,20 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   LESSON: when three registries should share a cross-cutting toggle, gate them at the ONE hook that
   already fires for it rather than re-deriving class state in each -- triggers had the pattern, the
   gap was just that gag/sub weren't subscribed to the same signal.
+- **matchre/replacere Unicode: measured, documented, NOT fixed (v0.10.3).** `fuzz_regex_unicode.rb`
+  quantified the long-noted gap: on a non-ASCII corpus, matchre ~83% / caps ~74% / replacere ~69%
+  match. Root cause is Ruby-vs-.NET regex CHAR-CLASS semantics, not our port: Ruby `\d\w\s\D\W\S` are
+  ASCII while .NET's are Unicode, Ruby honors POSIX `[[:alpha:]]` while .NET doesn't, and Ruby `^ $`
+  are line-anchored vs .NET's whole-string default. Decided to leave Ruby-native: (1) DR game text is
+  ASCII, so it never fires; (2) reaching parity can't cleanly hit 0 -- translating `\d\w\s`->`\p{}` is
+  safe-for-ASCII, but negated shorthand INSIDE a char class (`[\W]` = complement-of-union, not
+  union-of-complements) and POSIX classes have no clean 1:1 rewrite, and matching .NET would mean
+  DEGRADING Ruby (dropping `[[:alpha:]]`) purely for inputs that don't occur; (3) multiline is
+  structurally impossible (Genie `"..."` can't hold a newline; game lines are single). Same
+  cost/benefit call as the substr/ToInteger/replace leniency. LESSON: "fuzz round" doesn't always end
+  in a fix -- sometimes it ends in a QUANTIFIED, bounded, justified non-fix + a permanent guard
+  fuzzer; measuring "~78% on inputs that never occur" is what converts a scary TODO into a closed
+  decision.
 
 ## DR game-state (the big surprises)
 - **`XMLData` is shared GS/DR.** DR-specific state lives in DR modules.
