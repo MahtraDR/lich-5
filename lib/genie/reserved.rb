@@ -21,6 +21,12 @@ module Lich
       # ("Small_Edged"); we map them to the game's spaced names for the skill lookup.
       SKILL_VAR = /\A(?<skill>[A-Za-z][A-Za-z_]*)\.(?<field>learningrate|ranks?|percent)\z/i
 
+      # `$Time.isDay` + `$Time.is<Moon>Up` -- the Genie TimeTracker plugin's day/night
+      # and per-moon (Xibar/Yavash/Katamba) above-horizon flags. Bridged to Lich's
+      # moonwatch data (UserVars.moons/sun) by LichGameState. These are the only four
+      # $Time fields the corpus reads.
+      TIME_VAR = /\ATime\.is(?:Day|(?<moon>Xibar|Yavash|Katamba)Up)\z/i
+
       # Genie flag name => Lich global status predicate. These work for both DR and
       # GS (unlike XMLData.indicator, which DR does not populate).
       INDICATOR_CHECKS = {
@@ -87,6 +93,35 @@ module Lich
         when 'learningrate' then skills.getxp(skill)
         when 'rank', 'ranks' then skills.getrank(skill)
         when 'percent' then skills.getpercent(skill)
+        end
+      end
+
+      # @param name [String]
+      # @return [Boolean] whether +name+ is a $Time.is* (TimeTracker) reference
+      def time_var?(name)
+        name.to_s.match?(TIME_VAR)
+      end
+
+      # Resolve a $Time.isDay / $Time.is<Moon>Up reference (Genie TimeTracker) from
+      # moonwatch data. Returns nil when the data is unavailable (moonwatch not run /
+      # not DR) so the caller falls back to any stored #var -- some scripts self-populate
+      # $Time.* from `observe` output when no plugin/data is present.
+      #
+      # @param name [String] e.g. "Time.isXibarUp"
+      # @param visible_moons [Array<String>, nil] moon names above the horizon
+      #   (UserVars.moons['visible']); nil = no data
+      # @param day [Boolean, nil] whether it is daytime (UserVars.sun['day']); nil = no data
+      # @return [Integer, nil] 1/0, or nil if not a match / data unavailable
+      def time_var(name, visible_moons:, day:)
+        match = name.to_s.match(TIME_VAR)
+        return nil unless match
+
+        if match[:moon]
+          return nil if visible_moons.nil?
+
+          Array(visible_moons).map { |moon| moon.to_s.downcase }.include?(match[:moon].downcase) ? 1 : 0
+        else
+          day.nil? ? nil : (day ? 1 : 0)
         end
       end
 

@@ -71,6 +71,41 @@ RSpec.describe Lich::Genie::Reserved do
     end
   end
 
+  describe '.time_var (TimeTracker -> moonwatch bridge)' do
+    it 'recognizes $Time.isDay / $Time.is<Moon>Up references only' do
+      expect(described_class.time_var?('Time.isDay')).to be(true)
+      expect(described_class.time_var?('Time.isXibarUp')).to be(true)
+      expect(described_class.time_var?('Time.isYavashUp')).to be(true)
+      expect(described_class.time_var?('Time.isKatambaUp')).to be(true)
+      expect(described_class.time_var?('Time.isPlutoUp')).to be(false)
+      expect(described_class.time_var?('health')).to be(false)
+    end
+
+    it 'maps a moon to 1/0 by presence in the visible list (case-insensitive)' do
+      visible = %w[xibar katamba]
+      expect(described_class.time_var('Time.isXibarUp', visible_moons: visible, day: nil)).to eq(1)
+      expect(described_class.time_var('Time.isKatambaUp', visible_moons: visible, day: nil)).to eq(1)
+      expect(described_class.time_var('Time.isYavashUp', visible_moons: visible, day: nil)).to eq(0)
+      expect(described_class.time_var('Time.isXibarUp', visible_moons: ['XIBAR'], day: nil)).to eq(1)
+    end
+
+    it 'maps isDay from the day flag' do
+      expect(described_class.time_var('Time.isDay', visible_moons: nil, day: true)).to eq(1)
+      expect(described_class.time_var('Time.isDay', visible_moons: nil, day: false)).to eq(0)
+    end
+
+    it 'returns nil when the data is unavailable (so the store #var wins as fallback)' do
+      expect(described_class.time_var('Time.isXibarUp', visible_moons: nil, day: nil)).to be_nil
+      expect(described_class.time_var('Time.isDay', visible_moons: nil, day: nil)).to be_nil
+      # an empty visible list is DATA (moonwatch ran, no moons up), not "unavailable"
+      expect(described_class.time_var('Time.isXibarUp', visible_moons: [], day: nil)).to eq(0)
+    end
+
+    it 'returns nil for a non-Time name' do
+      expect(described_class.time_var('health', visible_moons: %w[xibar], day: true)).to be_nil
+    end
+  end
+
   describe '.indicator_check' do
     it 'maps every Genie status flag to its Lich check* predicate' do
       {

@@ -604,17 +604,22 @@ module Lich
       def key?(name)
         key = name.to_s.downcase
         RESOLVERS.key?(key) || !Reserved.indicator_check(key).nil? ||
-          Reserved.spell_timer?(name) || (skills_available? && Reserved.skill_var?(name))
+          Reserved.spell_timer?(name) || (skills_available? && Reserved.skill_var?(name)) ||
+          (time_available? && Reserved.time_var?(name))
       end
 
       # Names this resolver owns LIVE with no external writer to refresh a stored copy:
-      # the SpellTimer and EXPTracker/skill namespaces (a real Genie plugin rewrote
-      # these each tick; Lich synthesizes them). For these, live state must win over a
-      # value migrated into variables.cfg, or the stale copy shadows reality forever.
-      # Scalar reserved vars are deliberately excluded -- scripts shadow some (e.g.
-      # `#var inside 1`) and expect their #var to stick.
+      # the SpellTimer / EXPTracker(skill) / TimeTracker($Time) namespaces (a real Genie
+      # plugin rewrote these each tick; Lich synthesizes them). For these, live state must
+      # win over a value migrated into variables.cfg, or the stale copy shadows reality
+      # forever. SAFE even when the live source is absent: `[]` returns nil for these when
+      # there's no data (e.g. moonwatch not running), and global_get's `return live unless
+      # live.nil?` then falls through to the store -- so a script's self-populated $Time.*
+      # (from `observe`) still works. Scalar reserved vars are deliberately excluded --
+      # scripts shadow some (e.g. `#var inside 1`) and expect their #var to stick.
       def authoritative?(name)
-        Reserved.spell_timer?(name) || (skills_available? && Reserved.skill_var?(name))
+        Reserved.spell_timer?(name) || (skills_available? && Reserved.skill_var?(name)) ||
+          (time_available? && Reserved.time_var?(name))
       end
 
       def [](name)
@@ -629,6 +634,10 @@ module Lich
         elsif skills_available? && Reserved.skill_var?(name)
           # $<Skill>.LearningRate/.Ranks/.Percent -> DRSkill (Genie EXPTracker plugin)
           Reserved.skill_var(name, skills: Lich::DragonRealms::DRSkill).to_s
+        elsif time_available? && Reserved.time_var?(name)
+          # $Time.isDay / $Time.is<Moon>Up -> moonwatch (Genie TimeTracker plugin). nil
+          # (NOT "0") when moonwatch has no data yet, so global_get falls back to the store.
+          Reserved.time_var(name, visible_moons: moon_visible_names, day: sun_day)&.to_s
         end
       rescue StandardError
         nil
@@ -639,6 +648,38 @@ module Lich
       # DRSkill (the EXPTracker equivalent) exists only in DragonRealms.
       def skills_available?
         XMLData.game.to_s.start_with?('DR') && defined?(Lich::DragonRealms::DRSkill)
+      end
+
+      # TimeTracker's day/moon data (moonwatch) is a DragonRealms thing.
+      def time_available?
+        XMLData.game.to_s.start_with?('DR')
+      end
+
+      # Moons currently above the horizon, from moonwatch's UserVars.moons['visible']
+      # (the same raw list common-moonmage reads before its 4-min safety filter -- so this
+      # is TimeTracker's plain "isUp"). nil = moonwatch has never populated it (its `[]`
+      # caller then returns nil and the store wins). An empty [] = ran, no moons up.
+      def moon_visible_names
+        return nil unless defined?(UserVars) && UserVars.respond_to?(:moons)
+
+        moons = UserVars.moons
+        return nil unless moons.is_a?(Hash) && moons['visible']
+
+        Array(moons['visible'])
+      rescue StandardError
+        nil
+      end
+
+      # Daytime flag from moonwatch's UserVars.sun['day']; nil when unpopulated.
+      def sun_day
+        return nil unless defined?(UserVars) && UserVars.respond_to?(:sun)
+
+        sun = UserVars.sun
+        return nil unless sun.is_a?(Hash) && sun.key?('day')
+
+        sun['day']
+      rescue StandardError
+        nil
       end
 
       # Active-spell map for SpellTimer resolution: DR uses dr_active_spells directly

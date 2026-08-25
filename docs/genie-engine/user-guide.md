@@ -846,6 +846,26 @@ if $unixtime > $nextcast then put cast myspell
 
 Also available: `$time`, `$date`, `$year`, `$month`, and related time values.
 
+**Day/night and moons (the TimeTracker equivalent).** Scripts that gated on Genie's
+TimeTracker plugin work unchanged — these are bridged to Lich's **moonwatch**:
+
+| Variable | Meaning |
+| --- | --- |
+| `$Time.isDay` | `1` during the day, `0` at night |
+| `$Time.isXibarUp` | `1` when Xibar is above the horizon |
+| `$Time.isYavashUp` | `1` when Yavash is above the horizon |
+| `$Time.isKatambaUp` | `1` when Katamba is above the horizon |
+
+```
+if $Time.isXibarUp = 1 then put prepare xibar spell
+if $Time.isDay = 0 then echo It is night.
+```
+
+> Requires **moonwatch** to be running (it feeds the moon/day data, the way the
+> TimeTracker plugin did in Genie): `;e autostart('moonwatch')`. If moonwatch has no
+> data yet, `$Time.*` falls back to any value your script set with `#var` — so scripts
+> that self-populate `$Time.*` from `observe` still work.
+
 ### Other
 
 | Variable | Meaning |

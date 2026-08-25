@@ -95,14 +95,15 @@ genuinely need a tester are quarantined at the bottom. Keep this updated as we g
       occurrence and it is COMMENTED OUT (`# put #plugin load TimeTracker.dll` in uber.cmd). No live
       `#plugin` verb usage. BUT the audit surfaced ONE real plugin-DATA dependency beyond EXPTracker/
       SpellTimer -> see the `$Time.*` bridge item below.
-- [ ] **Bridge `$Time.*` (TimeTracker plugin) -> moonwatch (found by the #plugin audit).** Scripts
-      read `$Time.isDay` (50x) + `$Time.isXibarUp`/`isYavashUp`/`isKatambaUp` (25x each) -- day/night
-      + the three DR moons up/down, gating hunting/spellcasting. In native Genie these come from the
-      TimeTracker plugin. Lich already tracks exactly this via `common-moonmage.rb`
-      (`UserVars.moons['visible']` per-moon + `UserVars.sun['day']`, populated by moonwatch.lic). A
-      LichGameState reserved-var bridge (like SpellTimer/skills, via a pure `Reserved.time_var`
-      helper) maps them 1:1. Self-serviceable code; runtime needs moonwatch.lic running (same model
-      as SpellTimer needing its data source; DRCMM even auto-starts it).
+- [x] **Bridge `$Time.*` (TimeTracker plugin) -> moonwatch -> DONE v0.10.1.** `$Time.isDay` +
+      `$Time.is{Xibar,Yavash,Katamba}Up` now resolve from moonwatch's `UserVars.moons['visible']` /
+      `UserVars.sun['day']`. Pure `Reserved.time_var?`/`Reserved.time_var(visible_moons:, day:)`
+      helper (headlessly tested); LichGameState wires it + marks it `authoritative?` (live-wins, like
+      SpellTimer/skills). KEY safety: the resolver returns nil (not "0") when moonwatch has no data,
+      so global_get falls through to the store -> a script's self-populated `#var Time.*` (from
+      `observe`) still works when moonwatch isn't running. Uses the RAW `moons['visible']` (above-
+      horizon), not common-moonmage's 4-min-filtered helper, matching TimeTracker's plain "isUp".
+      Runtime needs moonwatch running. 6 reserved_spec examples; user-guide 13 documents it.
 
 ## P3 — Known divergences (documented; decide fix vs leave)
 

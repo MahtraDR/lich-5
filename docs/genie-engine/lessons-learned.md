@@ -490,6 +490,19 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   `~/genie-port-lab/scripts/{tirost,ubercombat}` home via a `GENIE_LAB` env root; all 9 now run.
   LESSON: a `skip "not present"` guard turns a moved-fixture path into invisible coverage loss --
   grep specs for `skip` when fixtures relocate.
+- **`$Time.*` (TimeTracker) bridged to moonwatch (v0.10.1).** The corpus's one real non-EXPTracker/
+  SpellTimer plugin dep. Bridged the 4 fields (isDay + is{Xibar,Yavash,Katamba}Up) to Lich's
+  `UserVars.moons['visible']` / `UserVars.sun['day']` (moonwatch), SpellTimer-style: a pure
+  `Reserved.time_var` helper (testable) + LichGameState wiring + `authoritative?` (live-wins). The
+  design hinge is graceful degradation via the EXISTING global_get flow: `authoritative?` runs
+  `return live unless live.nil?`, so making the resolver return **nil** (not "0") when moonwatch has
+  no data makes it fall through to the store -- which is exactly what lets a script's self-populated
+  `#var Time.*` (some scripts set it from `observe` when no plugin is loaded) keep working. So "live
+  wins WHEN we have live data, else the script's #var stands" needed NO new plumbing -- just nil vs
+  "0" discipline in the resolver. Used the RAW above-horizon list, not common-moonmage's 4-min-
+  filtered `visible_moons` helper, to match TimeTracker's plain "isUp". LESSON: match the host's
+  fallback semantics by returning nil (absent) vs a concrete value (known) -- the layered lookup
+  already does the right thing if each layer reports "I don't know" honestly.
 
 ## DR game-state (the big surprises)
 - **`XMLData` is shared GS/DR.** DR-specific state lives in DR modules.
