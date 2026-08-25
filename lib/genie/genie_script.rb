@@ -39,17 +39,16 @@ module Lich
         @downstream_buffer = LimitedArray.new
         @downstream_buffer.max_size = 400
         @want_downstream = true
-        # Lich-echoed lines (respond/_respond -> Script.new_script_output) reach a
-        # script's match buffer ONLY when want_script_output is set. Enable it so the
-        # Genie engine's matchwait/matchre can match text ECHOED BY LICH -- go2's
-        # "you're already there", "--- Lich: <script> has exited", another script's
-        # output -- not just the raw game stream. (Tirost's foundational ask: Genie
-        # matchtables + triggers matching Lich-echoed text.) The companion piece is the
-        # script-output trigger tap in ensure_downstream_hook!. NOTE/WATCH: this also
-        # feeds a Genie script's OWN echo (echo verb -> respond) into its match buffer,
-        # which native Genie does not do (it matches the game stream, not its own echo);
-        # if a working combat script regresses via a self-echo match, this is the lever.
-        @want_script_output = true
+        # We deliberately DO NOT use want_script_output. It would route ALL of Lich's
+        # "script output" into matchwait, but that channel also carries Lich's echo of
+        # every command a script SENDS (`[name]>echo Backup 5`, games.rb:652) -- which
+        # arrives instantly and self-matches `put echo <sentinel>` backup patterns,
+        # firing them before the real game feedback (the v0.10.x combat regression).
+        # Instead the ScriptOutputTriggerTap feeds matchwait a FILTERED stream: genuine
+        # Lich messages (go2's "you're already there", "--- Lich: X has exited", other
+        # scripts' output -- Tirost's ask) but NOT `[name]>` command echoes. See
+        # feed_script_output.
+        @want_script_output = false
         @want_downstream_xml = false
         @upstream_buffer = LimitedArray.new
         @want_upstream = false
@@ -105,15 +104,16 @@ module Lich
       @downstream_installed = false
       @script_output_tap_installed = false
 
-      # Prepended onto Lich::Common::Script's singleton class so EVERY line Lich
-      # echoes to the client (respond/_respond -> Script.new_script_output) also runs
-      # the Genie trigger pipeline -- the piece that lets #triggers match text ECHOED
-      # BY LICH, not just the raw game stream. Calls super first (the real buffer
-      # fan-out that want_script_output relies on) so matchwait behavior is unchanged.
+      # Prepended onto Lich::Common::Script's singleton class so EVERY line Lich echoes
+      # to the client (respond/_respond -> Script.new_script_output) is offered to the
+      # Genie engine -- the piece that lets matchwait/#triggers match text ECHOED BY LICH,
+      # not just the raw game stream. GenieScript uses want_script_output=false, so `super`
+      # does NOT fan this out to genie match buffers; feed_script_output does that itself,
+      # FILTERED (dropping `[name]>` command echoes).
       module ScriptOutputTriggerTap
         def new_script_output(line)
           super
-          Lich::Genie::GenieScript.fire_script_output_triggers(line)
+          Lich::Genie::GenieScript.feed_script_output(line)
         end
       end
 
@@ -132,9 +132,9 @@ module Lich
           # Self-install the opt-in assess exist-id shim so it survives relogin under
           # the in-Lich engine (native-Genie users install it from autostart instead).
           Lich::Genie::AssessIds.install! if Lich::Genie::AssessIds.enabled?
-          # Fire #triggers on text ECHOED BY LICH too (go2 messages, script-exit
-          # notices, other scripts' output), not just the raw game stream -- the
-          # companion to want_script_output (which does the same for matchwait).
+          # Feed matchwait AND #triggers with text ECHOED BY LICH (go2 messages,
+          # script-exit notices, other scripts' output) -- but not `[name]>` command
+          # echoes -- in addition to the raw game stream (see feed_script_output).
           install_script_output_trigger_tap!
           runner = trigger_runner
           Lich::Common::DownstreamHook.add('genie-downstream', lambda { |server_string|
@@ -192,10 +192,11 @@ module Lich
           server_string.gsub(/<[^>]+>/, '')
         end
 
-        # Prepend the script-output trigger tap onto Lich's Script singleton, ONCE.
-        # This is the single global choke point (Script.new_script_output is called
-        # once per Lich-echoed line, regardless of how many genie scripts run), so a
-        # line fires triggers exactly once -- never once-per-running-script.
+        # Prepend the script-output tap onto Lich's Script singleton, ONCE. This is the
+        # single global choke point (Script.new_script_output is called once per Lich-echoed
+        # line, regardless of how many genie scripts run), so feed_script_output runs the
+        # trigger pipeline exactly once per line and fans the (filtered) line out to every
+        # genie matchwait buffer itself.
         # @return [void]
         def install_script_output_trigger_tap!
           return if @script_output_tap_installed
@@ -205,20 +206,34 @@ module Lich
           Lich::Common::Script.singleton_class.prepend(ScriptOutputTriggerTap)
         end
 
-        # Run the Genie trigger pipeline against one Lich-echoed line. Re-entrancy is
-        # guarded PER THREAD: a trigger action that itself echoes (respond ->
-        # new_script_output -> here) must not recurse. fire/apply are synchronous, so
-        # a thread-local flag is sufficient. Never raises into the respond path.
+        # A Lich COMMAND ECHO: the line Game.puts writes when a script SENDS a command,
+        # `[<name>]>text` (games.rb:652, `[#{name}]#{$SEND_CHARACTER}#{str}`). These are
+        # NOT game feedback or Lich messages -- native Genie never matches them -- and
+        # feeding them to matchwait self-matched `put echo <sentinel>` backups instantly
+        # (the regression). `[[Room]]` room titles don't match (no `]>`).
+        COMMAND_ECHO = /\A\[[^\]]*\]#{Regexp.escape($SEND_CHARACTER || '>')}/.freeze
+
+        # Offer one Lich-echoed (script-output) line to the Genie engine: push it into every
+        # running genie script's matchwait buffer AND run the trigger pipeline -- but SKIP
+        # `[name]>` command echoes (see COMMAND_ECHO). This is the filtered replacement for
+        # want_script_output: matchwait/#triggers see genuine Lich messages (go2, script-exit,
+        # other scripts' output) without the script's own sent-command echoes.
+        #
+        # Re-entrancy is guarded PER THREAD: a trigger action that itself echoes (respond ->
+        # new_script_output -> here) must not recurse. fire/apply are synchronous, so a
+        # thread-local flag suffices. Never raises into the respond path.
         # @param line [String]
         # @return [void]
-        def fire_script_output_triggers(line)
+        def feed_script_output(line)
           return if Thread.current[:genie_in_script_trigger]
+          return if line.to_s =~ COMMAND_ECHO
 
           Thread.current[:genie_in_script_trigger] = true
           begin
             text = strip_xml_line(line).to_s.strip
             return if text.empty?
 
+            feed_matchwait(text)
             runner = trigger_runner
             Lich::Genie.triggers.apply(text) do |commands, captures|
               runner.fire(commands, captures)
@@ -227,7 +242,20 @@ module Lich
             Thread.current[:genie_in_script_trigger] = false
           end
         rescue StandardError => e
-          respond "--- Lich: genie script-output trigger error: #{e}"
+          respond "--- Lich: genie script-output feed error: #{e}"
+        end
+
+        # Push a genuine (non-command-echo) Lich-echoed line into the match buffer of every
+        # running genie script, so its matchwait/matchre can match it -- the filtered stand-in
+        # for want_script_output. Server (game) lines still arrive via want_downstream, so this
+        # only adds Lich's OWN messages; no double-feed.
+        # @return [void]
+        def feed_matchwait(text)
+          Lich::Common::Script.running.each do |script|
+            script.downstream_buffer.push(text) if script.is_a?(GenieScript)
+          end
+        rescue StandardError
+          nil
         end
 
         # Global-scoped runner that executes trigger actions (shared global store, so

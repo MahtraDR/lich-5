@@ -588,6 +588,22 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   verb -> respond) back into its match buffer, which native Genie does not do (it matches the game
   stream, not its own echo) -- if a working combat script regresses on a self-echo match, this is the
   lever to revisit.
+- **The WATCH above FIRED -- want_script_output was too broad; replaced with a FILTERED feed
+  (v0.10.5, Tirost regression).** Symptom: commonbg/commonretreat backups fired instantly. Root
+  cause: `Script.new_script_output` carries not just Lich's MESSAGES but Lich's echo of every command
+  a script SENDS -- `Game.puts` does `respond "[#{name}]#{$SEND_CHARACTER}#{str}"` (games.rb:652). So
+  `want_script_output=true` routed the script's own `[name]>echo AssessCBG Backup 5` command-echo into
+  its matchwait buffer, where it arrives INSTANTLY (on send) and self-matches the `put echo <sentinel>`
+  backup pattern before the real game feedback (which round-trips through the GAME's echo verb and
+  arrives later). Fix: set `want_script_output = false` and have the script-output tap fan out a
+  FILTERED line itself via `feed_script_output` -> `feed_matchwait`: it drops `[name]>` command echoes
+  (COMMAND_ECHO = `/\A\[[^\]]*\]#{$SEND_CHARACTER}/`; `[[Room]]` titles and `[Guardian] ...` game text
+  don't match) and pushes only genuine Lich messages (go2/script-exit/other-script output) to every
+  genie matchwait buffer + the trigger pipeline. Keeps Tirost's v0.9.7 ask AND kills the self-match.
+  LESSON: "match everything Lich echoes" is a trap -- Lich's client-echo stream conflates its own
+  MESSAGES with the echo of commands scripts SEND; only the former belongs in a matcher, and the
+  `[name]>` prefix is the clean discriminator. A `put echo X` sentinel is safe because it round-trips
+  through the game; a `respond`/command-echo of the same text is not.
 - **`put ,name` / `send ,name` now runs a LICH script/command (v0.9.7).** home.cmd's `put ,go2 2572`
   came back as "Please rephrase that command." -- the interpreter routed `#` to the bar-command router
   and `.` (SCRIPT_CHAR) to a Genie-script launch, but a leading Lich command char (`,`/`;`) fell
