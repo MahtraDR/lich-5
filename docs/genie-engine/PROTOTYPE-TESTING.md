@@ -3,7 +3,7 @@
 The Genie scripting engine now runs `.cmd` scripts end-to-end inside Lich. This is a
 working prototype: the interpreter, expression/variable engines, control flow, waits,
 matchwait, actions, and front-end `<genieHook>` emission are all implemented and covered
-by 105 passing specs. Some pieces are still stubbed (see Limitations).
+by 353 passing specs. A few pieces are still stubbed or deferred (see Limitations).
 
 ## Enable it
 
@@ -53,12 +53,18 @@ it is safe to run on a live character.
 
 ## Limitations (prototype)
 
-- `js`/`jscall`/`plugin` are stubbed (no-ops for now).
-- `wait`/`move` resume on the next line (no prompt/room-change detection yet).
-- `gag`/`sub` (Model A downstream rewriting) not yet wired into the stream.
-- Reserved game-state globals (`$health`, `$roundtime`, ...) cover a common subset; the full
-  Genie reserved list will be aligned next.
-- Command pacing goes straight through `put`; it will move to the command broker.
+- `js`/`jscall` run the `js_arrays` library natively (Ruby shim); any OTHER JavaScript, and
+  `#plugin`/`#pluginscript`, announce as unsupported (the corpus uses only `js_arrays`).
+- `wait`/`move` resume on the next line, not on a real prompt / room-change (DEFERRED: needs
+  prompt/room-change signals from the glue + a captured native-Genie session to validate).
+- Reserved game-state globals cover the common set plus the bridged plugin namespaces
+  (`$SpellTimer.*`, `$<Skill>.*` EXPTracker, `$Time.*` TimeTracker->moonwatch) and `$scriptlist`.
+- Command pacing goes straight through `put` (with `waitrt?`); command-broker integration is
+  aspirational.
+
+Everything else the corpus exercises is implemented: `gag`/`sub` (Model A downstream rewrite,
+class-gated by `#class`), triggers, `waiteval`, `#script` host control, `#queue clear`, class-scoped
+actions, and the assess exist-id shim. See `todo.md` for the full status.
 
 ## Report back
 

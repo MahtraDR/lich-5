@@ -121,8 +121,10 @@ These are emitted by `lib/genie/command_router.rb` (the `Core/Command.cs` port) 
 > single Lich `DownstreamHook` (stream-side rewrite), NOT rendered `<genieHook>` tags. They share this
 > catalog's shape so the engine emits one event type; the sink chooses the transport. The hook runs
 > after the raw line is already in `$_SERVERBUFFER_`, so reget/log.lic/other scripts see the original
-> — only the client display is filtered. Patterns are Genie regexes (invalid → literal); class-gating
-> of a gag/sub is not yet modeled (filters apply unconditionally). All other ops ride `<genieHook>`.
+> — only the client display is filtered. Patterns are Genie regexes (invalid → literal); a classed
+> gag/sub is gated by `#class` on/off like triggers (the sink's `class` event calls
+> `StreamFilters#set_class` alongside `triggers.set_class`; a no-class filter is always active). All
+> other ops ride `<genieHook>`.
 
 Engine-side `#commands` (`#var`/`#tvar`/`#svar`/`#unvar`, `#eval`/`#evalmath`/`#math`/`#if`, `#send`)
 execute inside Lich and emit **no** hook. An inline `#function` used as a value (e.g. `#var t

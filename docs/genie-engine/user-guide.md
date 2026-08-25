@@ -447,6 +447,19 @@ put forward
 The script waits until a line containing "You are now standing" arrives, then continues. For a
 regular-expression version, use `waitforre`.
 
+### `waiteval` — pause until a condition becomes true
+
+Where `waitfor` waits for a *line*, `waiteval` waits for an *expression* to become true — handy for
+waiting on a variable or game state that changes as the game goes on:
+
+```
+waiteval $roomid = %home.room     # wait until you're back in the home room
+waiteval $Time.isXibarUp = 1      # wait for Xibar to rise
+```
+
+The condition is re-checked as new lines arrive, so it resumes as soon as it's satisfied. (It has
+no timeout — pair it with logic that guarantees the condition will eventually hold.)
+
 ### `match` + `matchwait` — branch on what happens
 
 Set up several possible outcomes with `match` (each names a label), then `matchwait` pauses until one
@@ -889,6 +902,7 @@ if $Time.isDay = 0 then echo It is night.
 | `$game` (or `$gamename`) | The game you're playing (e.g. `DR`) |
 | `$level` | Your character level |
 | `$roomtitle`, `$roomdesc`, `$gameroomid`, `$inside` | Raw room title, description, room id, and `1`/`0` for indoors |
+| `$scriptlist` | `\|`-joined names of your running Genie scripts (no `.cmd`), or `none` |
 
 > If you know a Genie reserved variable that isn't listed here, try it — many of the standard ones
 > are supported. If one you rely on is missing or returns nothing, please report it (it's easy to
