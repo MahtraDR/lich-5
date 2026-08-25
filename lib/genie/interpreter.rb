@@ -425,7 +425,18 @@ module Lich
         end
         label = Text.keyword_string(arg)
         pattern = Text.argument_string(arg)
-        @match_list << { label: label.downcase, pattern: pattern, regex: regex }
+        compiled = nil
+        if regex
+          begin
+            compiled = Regexp.new(pattern)
+          rescue RegexpError => e
+            # Genie compiles the Match regex when the command runs and wraps matchwait
+            # in try/catch (Script.cs:506/1264); a bad pattern must not crash the script.
+            echo_line("[Genie: invalid matchre pattern: #{pattern} (#{e.message})]")
+            return
+          end
+        end
+        @match_list << { label: label.downcase, pattern: pattern, regex: regex, compiled: compiled }
       end
 
       def do_matchwait(arg, index)
@@ -468,10 +479,20 @@ module Lich
             label = match_line(line)
             next if label.nil?
 
+            target = @program.labels[label]
+            if target.nil?
+              # Parity: Genie prints "Unknown label from MATCH command" and stops rather
+              # than crashing (Script.cs:1665); do_goto/do_gosub abort the same way. Without
+              # this, a missing label stored nil and blew up later at the row-index compare.
+              @match_list = []
+              echo_line("[Unknown label from MATCH command: #{label}]")
+              finish
+              return
+            end
             local_set('lastlabel', label)
             @call_stack.clear_blocks
             @match_list = []
-            @call_stack.line_value = @program.labels[label]
+            @call_stack.line_value = target
             @state = :running
             return
           elsif @match_timeout && now >= @match_timeout
@@ -501,17 +522,22 @@ module Lich
       end
 
       def waitfor_match?(line)
-        if @wait_regex
-          !Regexp.new(@wait_string).match(line).nil?
-        else
-          line.downcase.include?(@wait_string.downcase)
-        end
+        return line.downcase.include?(@wait_string.downcase) unless @wait_regex
+
+        !Regexp.new(@wait_string).match(line).nil?
+      rescue RegexpError => e
+        # Genie wraps waitfor eval in try/catch (Script.cs:1225); a bad regex must not
+        # crash. waitfor has no timeout, so end the script (with a message) rather than
+        # silently spin forever on an uncompilable pattern.
+        echo_line("[Genie: invalid waitforre pattern: #{@wait_string} (#{e.message})]")
+        finish
+        false
       end
 
       def match_line(line)
         hit = @match_list.find do |entry|
           if entry[:regex]
-            (@last_match = Regexp.new(entry[:pattern]).match(line.strip))
+            (@last_match = entry[:compiled].match(line.strip))
           else
             line.include?(entry[:pattern])
           end

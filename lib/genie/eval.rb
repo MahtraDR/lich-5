@@ -16,8 +16,12 @@ module Lich
     # Instantiate per script (mirrors Genie's per-script m_oEval) so `matchre`
     # capture groups accumulate in #result_list for the caller to copy into $0..$n.
     #
-    # TODO(regex-parity): matchre/replacere use default Ruby regex options for now.
-    #   Align with Genie4 RegexOptions.cs when the shared Genie::Regex helper lands.
+    # regex-parity: matchre/replacere are validated byte-for-byte against Genie's real
+    #   Eval.cs (which uses DEFAULT .NET RegexOptions) via the fuzz_regex.rb oracle --
+    #   0 divergences incl. capture groups. KNOWN untested edge: .NET's \d\w\s are
+    #   Unicode-aware and its ^ $ anchor only string start/end, whereas Ruby's are
+    #   ASCII / line-anchored; scripts feeding non-ASCII or embedded-newline subjects to
+    #   matchre/replacere could diverge. Revisit with a Unicode/newline corpus if it bites.
     class Eval
       SEPARATORS = "!=<>,&|"
 
@@ -410,7 +414,10 @@ module Lich
       end
 
       def matchre(subject, pattern)
-        match = Regexp.new(pattern).match(subject.strip)
+        # Genie: Regex.Match(args[0], args[1]) with NO trim (Eval.cs:1149). We used to
+        # match against subject.strip, which diverged (and dropped leading/trailing
+        # whitespace from capture groups) -- verified via the matchre/matchrecaps oracle.
+        match = Regexp.new(pattern).match(subject)
         if match
           @result_list = match.to_a.map(&:to_s)
           num_bool(true)
@@ -421,10 +428,69 @@ module Lich
 
       def replacere(subject, pattern, replacement)
         regex = Regexp.new(pattern)
-        subject.gsub(regex) do
-          matchdata = Regexp.last_match
-          replacement.gsub(/\$(\d+)/) { matchdata[Regexp.last_match(1).to_i].to_s }
+        subject.gsub(regex) { expand_replacement(replacement, Regexp.last_match, subject) }
+      end
+
+      # Faithful port of .NET Regex.Replace substitution (Genie's replacere is
+      # Regex.Replace(args[0], args[1], args[2]) with default options, Eval.cs:1176).
+      # Recognizes $$, $&, $`, $', $_, $+, ${name}, ${number}, $number (maximal digit
+      # run); an out-of-range/invalid group ref or unknown $token is emitted LITERALLY
+      # (leading $ included) -- matching .NET, not our old $digits-only gsub.
+      def expand_replacement(replacement, matchdata, input)
+        out = +''
+        i = 0
+        len = replacement.length
+        while i < len
+          unless replacement[i] == '$'
+            out << replacement[i]
+            i += 1
+            next
+          end
+          consumed, text = replacement_token(replacement, i, matchdata, input)
+          out << text
+          i += consumed
         end
+        out
+      end
+
+      # Resolve the $-token starting at +i+; returns [chars_consumed, replacement_text].
+      def replacement_token(replacement, i, matchdata, input)
+        nxt = replacement[i + 1]
+        case nxt
+        when nil then [1, '$']
+        when '$' then [2, '$']
+        when '&' then [2, matchdata[0].to_s]
+        when '`' then [2, matchdata.pre_match]
+        when "'" then [2, matchdata.post_match]
+        when '_' then [2, input]
+        when '+' then [2, matchdata[matchdata.size - 1].to_s]
+        when '{' then braced_group(replacement, i, matchdata)
+        when /[0-9]/ then numbered_group(replacement, i, matchdata)
+        else [1, '$']
+        end
+      end
+
+      def braced_group(replacement, i, matchdata)
+        close = replacement.index('}', i + 2)
+        token = close ? replacement[(i + 2)...close] : nil
+        if token&.match?(/\A\d+\z/) && group_ok?(matchdata, token.to_i)
+          [close - i + 1, matchdata[token.to_i].to_s]
+        elsif token && !token.empty? && !token.match?(/\A\d+\z/) && matchdata.names.include?(token)
+          [close - i + 1, matchdata[token].to_s]
+        else
+          [1, '$']
+        end
+      end
+
+      def numbered_group(replacement, i, matchdata)
+        j = i + 1
+        j += 1 while j < replacement.length && replacement[j].match?(/[0-9]/)
+        num = replacement[(i + 1)...j].to_i
+        group_ok?(matchdata, num) ? [j - i, matchdata[num].to_s] : [1, '$']
+      end
+
+      def group_ok?(matchdata, num)
+        num >= 0 && num < matchdata.size
       end
 
       def count_occurrences(haystack, needle)

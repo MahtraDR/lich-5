@@ -153,6 +153,32 @@ RSpec.describe Lich::Genie::Eval do
       expect(evaluator.result_list).to eq(['42/100', '42', '100'])
     end
 
+    # Genie's matchre does NOT trim the subject (Eval.cs:1149); we used to match against
+    # subject.strip, diverging on leading/trailing whitespace (bool AND captures).
+    it 'matchre does not strip the subject before matching' do
+      expect(truthy('matchre("  pad  ", "^\\s+")')).to be(true)
+      expect(truthy('matchre(" lead", "\\s")')).to be(true)
+      evaluator.eval_string('matchre("  pad  ", ".+")')
+      expect(evaluator.result_list).to eq(['  pad  '])
+    end
+
+    # Genie's replacere is .NET Regex.Replace (Eval.cs:1176): full substitution grammar,
+    # not just $digits. Verified byte-for-byte against the oracle via fuzz_regex.rb.
+    it 'replacere honors .NET substitution metacharacters' do
+      expect(str('replacere("abc", "(b)", "[${1}]")')).to eq('a[b]c')
+      expect(str('replacere("abc", "b", "[$&]")')).to eq('a[b]c')
+      expect(str('replacere("abc", "b", "x$$y")')).to eq('ax$yc')
+      expect(str('replacere("abc", "(b)", "$`|$1|$\'")')).to eq('aa|b|cc')
+      expect(str('replacere("abc", "b", "[$_]")')).to eq('a[abc]c')
+      expect(str('replacere("abc", "(a)(b)(c)", "$+")')).to eq('c')
+    end
+
+    it 'replacere leaves invalid/out-of-range group refs literal' do
+      expect(str('replacere("abc", "(b)", "[$2]")')).to eq('a[$2]c') # only 1 group
+      expect(str('replacere("Xb", "(b)", "$12")')).to eq('X$12')     # maximal digit run, invalid
+      expect(str('replacere("abc", "b", "$z")')).to eq('a$zc')
+    end
+
     it 'def/defined against the globals lookup' do
       expect(truthy('def("knownvar")')).to be(true)
       expect(truthy('defined("missingvar")')).to be(false)

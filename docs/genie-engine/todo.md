@@ -33,13 +33,28 @@ genuinely need a tester are quarantined at the bottom. Keep this updated as we g
       `to_integer`/`to_long` VALUE parity is exact; their only diffs are overflow/non-numeric where
       C# THROWS -- left lenient (reconciled at call sites: `\` overflow-checks Int64 in math_eval,
       substr clamps) -> see P3. 7 regressions added to numeric_spec.rb.
-- [ ] **Extend `fuzz_eval.rb` to `match`/`matchre`/`replacere`.** Regex + capture-group parity
-      (deliberately excluded so far). Watch for catastrophic-backtracking hangs on the oracle.
-- [ ] **Corpus execute-sweep (runtime robustness).** Beyond `corpus_sweep.rb` (compile only):
-      run each corpus script headless against a synthetic/empty stream, catch exceptions,
-      infinite-loop-guard trips, and runtime unknown-verb no-ops. Not parity, but finds crashes.
-- [ ] **Property/invariant tests.** e.g. `format_double` <-> parse round-trip; substitution
-      idempotence; `parse_args` join/split stability. No oracle needed.
+- [x] **`match`/`matchre`/`replacere` regex fuzzer. DONE v0.9.9.** `reference/fuzz_regex.rb` +
+      new oracle mode `matchrecaps` (serializes Eval.ResultList so capture groups are observable).
+      Found+fixed 2 divergences: matchre STRIPPED the subject (Genie doesn't -> broke bool AND
+      captures on leading/trailing whitespace), and replacere only handled `$digits` (Genie is full
+      .NET Regex.Replace: $$/$&/$`/$'/$_/$+/${n}/${name}, out-of-range->literal). matchre/
+      matchre_caps/replacere now 100% (5k x8 seeds). KNOWN: `replace(s,"")` empty-needle -> Genie
+      throws ArgumentException, we're lenient (documented, substr/count precedent). Untested edge:
+      Unicode \d\w\s + multiline ^$ (Ruby vs .NET default) -- see eval.rb note.
+- [x] **Corpus execute-sweep. DONE v0.9.9.** `reference/corpus_execute_sweep.rb` runs all 1499
+      corpus .cmd headless against a synthetic/EOF stream (fake ports + virtual clock so waits
+      resolve/guards fire authentically; per-script hard-timeout thread). 0 Ruby exceptions, 0
+      timeouts on the stream. Static+harness analysis surfaced 3 unguarded crash sites (reachable
+      on a live line; Genie guards all 3 in Script.cs) -> FIXED: matchwait->undefined label
+      (NoMethodError; 91 literal offenders in corpus), malformed matchre pattern (RegexpError;
+      precompile at add_match), malformed waitforre pattern (RegexpError). 3 regressions in
+      interpreter_spec.rb.
+- [x] **Property/invariant tests. DONE v0.9.9.** `reference/property_invariants.rb` (exhaustive,
+      40k x5 seeds) + `spec/lib/genie/property_spec.rb` (8-example CI subset). All HOLD: format_double
+      <-> string_to_double bit-exact round-trip + canonical-form stability + well-formed layout;
+      to_integer within 0.5/idempotent/identity; safe_split.join round-trip; parse_args plain-token
+      round-trip; expand no-op on sigil-free text + idempotent on %local/@special (the $/backslash
+      cases correctly DON'T -- expand un-escapes + $-arg pass runs first; invariant refined). No bugs.
 
 ## P2 — Engine feature gaps (recognized-but-stubbed / partial)
 
@@ -80,6 +95,15 @@ genuinely need a tester are quarantined at the bottom. Keep this updated as we g
       Int64-overflow-checks (math_eval), substr clamps (the substr-out-of-range item above),
       round-digits/factorial/element take small integers. Decision: leave lenient (like substr) --
       the script-level effect of Genie's throw is unobservable from the isolated evaluator.
+- [ ] **`replace(s, "")` (empty needle) (v0.9.9).** Genie's `String.Replace("", ...)` throws
+      ArgumentException (uncaught, propagates out of EvalString); ours is lenient (Ruby gsub inserts
+      the replacement between every char). Left lenient, matching the substr-out-of-range + count
+      decisions -- and faithfully raising is awkward anyway (eval_string's `rescue Error` would
+      swallow it to ""). fuzz_regex reports it every run so it stays visible.
+- [ ] **matchre/replacere Unicode + multiline (v0.9.9).** Validated byte-for-byte vs Genie for
+      ASCII, newline-free subjects. UNTESTED: .NET `\d\w\s` are Unicode-aware and its `^ $` anchor
+      only string start/end, vs Ruby's ASCII / line-anchored. A non-ASCII or embedded-newline
+      subject to matchre/replacere could diverge -- revisit with a Unicode/newline corpus if it bites.
 - [ ] **`count(s, "")` (empty needle).** INFINITE LOOP in Genie4's own Eval.cs (hangs the
       oracle); ours returns cleanly. A Genie bug — decision: do NOT replicate (leave documented).
 

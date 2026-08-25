@@ -486,4 +486,24 @@ RSpec.describe Lich::Genie::Interpreter do
       expect(result[:hooks]).to eq([['class', { 'name' => 'panic', 'enabled' => true }]])
     end
   end
+
+  # Runtime crash hardening surfaced by the corpus execute-sweep: three unguarded
+  # sites that would raise on a live game line. Genie guards all three (Script.cs).
+  describe 'match/waitfor robustness (runtime crash hardening)' do
+    it 'aborts gracefully when a match targets an undefined label' do
+      source = "match hit a goblin\nmatchwait\nexit\n"
+      result = run_script(source, input_lines: ['you see a goblin here'])
+      expect(result[:echoes].join).to match(/Unknown label from MATCH command: hit/)
+    end
+
+    it 'does not crash on a malformed matchre pattern' do
+      source = "matchre done (unbalanced\nmatchwait 1\ndone:\necho ok\nexit\n"
+      expect { run_script(source, input_lines: ['some line']) }.not_to raise_error
+    end
+
+    it 'does not crash on a malformed waitforre pattern' do
+      source = "waitforre (nope\nexit\n"
+      expect { run_script(source, input_lines: ['a line']) }.not_to raise_error
+    end
+  end
 end

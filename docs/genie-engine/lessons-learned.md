@@ -412,6 +412,46 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   from the isolated evaluator. LESSON: a "tolerant" parse helper that delegates to the host
   language's parser silently inherits that parser's grammar (Ruby Float's hex/underscore/Infinity)
   -- pin the SOURCE runtime's grammar explicitly and fuzz it.
+- **Regex parity (match/matchre/replacere) + capture groups (v0.9.9).** `reference/fuzz_regex.rb`
+  fuzzes these via the oracle's `eval` mode, and a NEW oracle mode `matchrecaps` runs a matchre(...)
+  then serializes Genie's real `Eval.ResultList` (m_RegExpResultList) so CAPTURE-GROUP parity is
+  observable (it isn't through `eval`, which returns only "1"/"0"). Two real bugs: (1) our matchre
+  matched `subject.strip` while Genie does `Regex.Match(args[0], args[1])` with NO trim (Eval.cs:1149)
+  -- diverged on leading/trailing whitespace in BOTH the boolean and the captures; fixed by dropping
+  .strip. (2) our replacere only expanded `$digits`, but Genie's replacere is .NET `Regex.Replace`
+  (Eval.cs:1176) with the full substitution grammar -- $$ $& $` $' $_ $+ ${name} ${number} $number
+  (maximal digit run), and an out-of-range/invalid ref is emitted LITERALLY (leading $ included);
+  ported as `expand_replacement`. matchre/matchre_caps/replacere now 100% (5k x8 seeds). LEFT
+  lenient: `replace(s,"")` empty-needle (Genie throws ArgumentException) -- substr/count precedent.
+  UNTESTED edge: matchre/replacere use DEFAULT .NET RegexOptions, so .NET's Unicode `\d\w\s` and
+  string-anchored `^ $` differ from Ruby's ASCII/line-anchored -- a non-ASCII/newline subject could
+  diverge (corpus is ASCII+newline-free). LESSON: side-effect state (capture groups in ResultList)
+  needs its OWN oracle projection; a function's return value alone hides half the contract.
+- **Corpus EXECUTE-sweep -> 3 runtime crash-hardening fixes (v0.9.9).** `reference/corpus_execute_
+  sweep.rb` runs all 1499 corpus .cmd headless against a synthetic/EOF stream: fake ports + a virtual
+  clock (real monotonic + fake accumulator) so timed waits resolve instantly while the engine's
+  genuine runaway guards still fire, each script in a hard-timeout thread. 0 Ruby exceptions / 0
+  timeouts on the stream itself. But a synthetic stream only exercises the matchwaits it happens to
+  feed; STATIC analysis + harness validation surfaced 3 unguarded sites that crash on the right LIVE
+  line -- and Genie explicitly guards all 3 (Script.cs), so they're parity bugs too: (1) matchwait
+  jumping to an UNDEFINED label stored nil -> `NoMethodError` later at the row-index compare (91
+  literal offenders in the corpus; Genie prints "Unknown label from MATCH command", Script.cs:1665)
+  -> abort like do_goto; (2) a malformed `matchre` pattern -> unrescued `RegexpError` (Genie wraps
+  matchwait in try/catch + compiles at construct time) -> precompile at add_match, drop the bad
+  entry; (3) malformed `waitforre` -> same, and worse (waitfor has no timeout) -> rescue + finish.
+  3 regressions in interpreter_spec.rb. LESSON: a runtime sweep proves "doesn't crash on THIS
+  stream," not "can't crash" -- pair it with static reachability analysis for the inputs the stream
+  never produced.
+- **Property/invariant tests (v0.9.9), no oracle.** `reference/property_invariants.rb` (40k x5 seeds)
+  + `spec/lib/genie/property_spec.rb` (CI subset). All HOLD, no bugs: format_double<->string_to_double
+  bit-exact round-trip (incl. subnormals/Float::MAX via raw bit patterns) + format_double is a stable
+  canonical form across a parse + always a well-formed .NET fixed/sci layout (no bad leading zeros);
+  to_integer within 0.5/idempotent/identity-on-integrals; safe_split(s,sep).join(sep)==s; parse_args
+  round-trips plain space-joined tokens. REFINED invariant: `expand` is idempotent ONLY for
+  %local/@special sigil-free input -- it is NOT for `$`/backslash input BY DESIGN (expand un-escapes
+  `\$`->`$` and runs the $-arg pass first; both are single-application). LESSON: a failing property is
+  as often a mis-stated invariant as a bug -- confirm the property reflects Genie's actual behavior
+  before "fixing" the code.
 
 ## DR game-state (the big surprises)
 - **`XMLData` is shared GS/DR.** DR-specific state lives in DR modules.
