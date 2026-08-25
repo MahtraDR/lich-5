@@ -58,20 +58,34 @@ genuinely need a tester are quarantined at the bottom. Keep this updated as we g
 
 ## P2 — Engine feature gaps (recognized-but-stubbed / partial)
 
-- [ ] **`waiteval` is a SILENT no-op.** Mapped in `lexer.rb` (`:waiteval`) but has no arm in
-      `interpreter.rb#run_script_row` -> recognized at compile, does nothing at runtime (script
-      races past a wait). Implement `waiteval (cond)` = block until the eval condition is true
-      (like Genie). Check corpus frequency first.
-- [ ] **`wait` / `move` / `nextroom` are prototype.** They resume on the next line, not on a
-      real prompt / room-change (interpreter.rb docstring "Scope note (prototype)"). Align with
-      Genie's prompt/room-change semantics.
-- [ ] **`execute_action` command coverage.** Action bodies only handle goto/put/send/var/echo/
-      js/jscall/action/`#`-routing; `if`/`math`/`shift` fall through to the game (1 `if` case in
-      the corpus: `action (move) if (...) then shift;...`). Broaden to full row execution.
-- [ ] **eval-actions (`action e/...` / variable-change triggers).** Unimplemented; 0 corpus
-      uses today. Genie fires these on variable change (Script.cs TriggerVariableChanged).
-- [ ] **`#queue` host-control.** Not implemented (companion to the shipped `#script`). Port
-      Genie4's queue semantics (Command.cs) + a host queue port, like `#script`.
+- [x] **`waiteval` SILENT no-op -> IMPLEMENTED v0.10.0.** Corpus: 5 uses (2 in the oldtriggers
+      template; real ones swimhaven `!matchre($scriptlist,...)` + hunt.cmd `$roomid = %starter.room`)
+      -- all reference LIVE/reserved vars that move with the stream, so we re-evaluate the RAW
+      (re-substituted) condition on each incoming line via resume_line (Genie re-checks on a variable
+      change; per-line is the observable equivalent). `waiteval_satisfied?` in interpreter.rb. NOTE:
+      swimhaven's `$scriptlist` is still stubbed to 'none' (separate gap), so that one resumes early.
+- [ ] **`wait` / `move` / `nextroom` are prototype (DEFERRED, needs tester).** They resume on the
+      next LINE; Genie's `wait` resumes on the next PROMPT (TriggerPrompt) and `move` on a ROOM
+      CHANGE (TriggerMove) -- Script.cs:1573/1621, EvalWait/EvalMove. Faithful semantics need (a)
+      prompt + room-change SIGNALS plumbed from the Lich glue into the interpreter's wait resume, and
+      (b) validation that it doesn't regress combat -- these are the HIGHEST-frequency verbs (wait
+      711, move 367) on TESTER-VALIDATED combat, and this is exactly the script-flow layer the
+      "script-flow replay fixture" tester-once item exists for. Changing it blind is too high-risk;
+      left as the working prototype until we have that fixture. nextroom: 0 corpus uses.
+- [x] **`execute_action` if/math/shift -> IMPLEMENTED v0.10.0.** Refactored to
+      `dispatch_action_command` + added `math` (many `action math <ctr> add 1` in commoncombattriggers
+      -- these used to fall through to the game as literal "math ..."), `shift` (-> do_shift), and
+      `if (cond) then <cmd>` (`action (move) if (%movewait=0) then shift`; re-substitutes+evals the
+      condition, runs the THEN command back through the dispatch).
+- [ ] **eval-actions (`action e/...` / variable-change triggers).** Unimplemented; 1 corpus use
+      (an automapper edge). Same machinery as Genie's TriggerVariableChanged (also what waiteval uses
+      natively). Low value; our waiteval per-line model sidesteps needing it. Leave until a real dep.
+- [x] **`#queue` host-control -> RESOLVED v0.10.0 (recognized no-op).** Corpus is 144/144
+      `#queue clear` (zero populate sites) -- scripts only DEFENSIVELY clear Genie's timed
+      CommandQueue on abort/reset. The in-Lich engine sends immediately (waitrt? pacing, no queue), so
+      there's nothing to leak and `#queue clear` is a satisfied no-op; recognized in command_router
+      (`do_queue`) so it no longer emits a stray FE hook. A populate subcommand (none in corpus)
+      announces unsupported. A real CommandQueue port would be wasted effort for 0 populate sites.
 - [ ] **Non-`js_arrays` JavaScript.** `#js`/`#jscall` cover the `js_arrays` library natively;
       any OTHER JS `announce`s as unsupported. Fine unless a corpus script needs more (audit).
 - [ ] **`#plugin` / `#pluginscript`.** Announce-only (no plugin host). Confirm nothing in the

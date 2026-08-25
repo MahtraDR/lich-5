@@ -108,6 +108,7 @@ module Lich
         when 'goto' then goto_room(argument)
         when 'script' then do_script(args, argument)
         when 'mapper', 'automapper' then '' # reset/etc: no-op (we route movement via go2/DRC)
+        when 'queue' then do_queue(args)
         else dispatch_fe(keyword, args, argument)
         end
       end
@@ -135,6 +136,20 @@ module Lich
         return emit_generic('script', args, argument) if action.nil?
 
         apply_script_action(action, args[2..].join(' '))
+      end
+
+      # `#queue clear` empties Genie's timed CommandQueue (Command.cs:1155). The in-Lich
+      # engine sends commands immediately (waitrt? pacing, no timed queue exists), so there
+      # is nothing to leak and `#queue clear` is a satisfied no-op -- and it is the ONLY
+      # form the corpus uses (144/144 are `#queue clear`, all defensive clears on abort/
+      # reset). A populate subcommand (add/list) would need a real host queue; none appear
+      # in the corpus, so those announce as unsupported instead of silently emitting a
+      # front-end hook nothing consumes.
+      def do_queue(args)
+        return '' if args.length < 2 || args[1].to_s.casecmp?('clear')
+
+        @echo&.call("--- Genie: #queue #{args[1]} not supported (the in-Lich engine sends immediately)")
+        ''
       end
 
       def apply_script_action(action, spec)

@@ -487,6 +487,36 @@ RSpec.describe Lich::Genie::Interpreter do
     end
   end
 
+  describe 'waiteval + richer action bodies (P2 gaps)' do
+    it 'waiteval blocks until its condition becomes true (re-evaluated per line)' do
+      # A per-line action bumps %n; waiteval was a SILENT no-op before, racing past.
+      source = <<~GENIE
+        %n = 0
+        action math n add 1 when .
+        waiteval (%n > 2)
+        echo done %n
+        exit
+      GENIE
+      result = run_script(source, input_lines: %w[a b c d])
+      expect(result[:echoes]).to eq(['done 3'])
+    end
+
+    it 'runs math/if inside action bodies instead of sending them to the game' do
+      source = <<~GENIE
+        %n = 0
+        action if (1 = 1) then math n add 5 when ^bump
+        match done ok
+        matchwait 1
+        done:
+        echo n=%n
+        exit
+      GENIE
+      result = run_script(source, input_lines: %w[bump ok])
+      expect(result[:echoes]).to eq(['n=5'])
+      expect(result[:commands]).to be_empty # math/if handled locally, nothing leaked to the game
+    end
+  end
+
   # Runtime crash hardening surfaced by the corpus execute-sweep: three unguarded
   # sites that would raise on a live game line. Genie guards all three (Script.cs).
   describe 'match/waitfor robustness (runtime crash hardening)' do

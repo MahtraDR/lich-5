@@ -115,6 +115,21 @@ RSpec.describe Lich::Genie::CommandRouter do
     end
   end
 
+  describe '#queue (no timed queue in the in-Lich engine)' do
+    it '#queue clear is a satisfied no-op (nothing to clear, no FE hook)' do
+      expect { router.route('#queue clear') }.not_to raise_error
+      expect(hooks).to be_empty
+      expect(sends).to be_empty
+      expect(echoes).to be_empty
+    end
+
+    it 'announces an unsupported populate subcommand instead of a silent hook' do
+      router.route('#queue add 5 kick')
+      expect(hooks).to be_empty
+      expect(echoes.join).to match(/#queue add not supported/)
+    end
+  end
+
   describe 'engine-side echo' do
     it 'echoes plain text locally' do
       router.route('#echo hello world')

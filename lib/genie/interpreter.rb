@@ -90,6 +90,7 @@ module Lich
           when :delayed then wait_deadline(@delay_end)
           when :matchwait then resume_matchwait
           when :waitfor then resume_line { |line| waitfor_match?(line) }
+          when :waiteval then resume_line { |_line| waiteval_satisfied? }
           when :wait then resume_line { |_line| true } # prototype: resume on next line
           when :move then resume_line { |_line| true } # prototype: resume on next line
           else @state = :finished
@@ -206,6 +207,7 @@ module Lich
         when :delay then return do_delay(arg, index)
         when :waitfor then return enter_wait(:waitfor, index) { @wait_string = arg; @wait_regex = false }
         when :waitforre then return enter_wait(:waitfor, index) { @wait_string = arg; @wait_regex = true }
+        when :waiteval then return enter_wait(:waiteval, index) { @waiteval_expr = Text.argument_string(instruction.content) }
         when :wait then return enter_wait(:wait, index)
         when :match then add_match(arg, false)
         when :matchre then add_match(arg, true)
@@ -521,6 +523,19 @@ module Lich
         end
       end
 
+      # Genie's `waiteval (cond)` blocks until the boolean expression becomes true; Genie
+      # re-checks it on a VARIABLE CHANGE (TriggerVariableChanged, Script.cs:1443). Our
+      # corpus uses reference LIVE/reserved vars ($roomid, $scriptlist) that move WITH the
+      # stream, so we re-evaluate the (freshly re-substituted) condition on each incoming
+      # line -- the observable equivalent. Stored RAW (unsubstituted) so changed vars are
+      # picked up each pass (Genie uses oLine.sRowContent + ParseVariables per check).
+      # Was a SILENT no-op before (recognized at compile, no runtime arm -> raced past).
+      def waiteval_satisfied?
+        @eval.do_eval(substitute(@waiteval_expr.to_s))
+      rescue StandardError
+        false
+      end
+
       def waitfor_match?(line)
         return line.downcase.include?(@wait_string.downcase) unless @wait_regex
 
@@ -621,30 +636,58 @@ module Lich
           command = raw.strip.gsub(/\$(\d+)/) { match[Regexp.last_match(1).to_i].to_s }
           next if command.empty?
 
-          if command.start_with?('#')
-            @router.route(substitute(command))
-            next
-          end
-
-          keyword = Text.keyword_string(command).downcase
-          argument = Text.argument_string(command)
-          case keyword
-          when 'goto'
-            target = @program.labels[argument.strip.downcase]
-            if target
-              @action_jumped = true
-              @action_jump_target = target
-              break
-            end
-          when 'echo' then echo_line(argument)
-          when 'put', 'send' then send_text(substitute(argument))
-          when 'setvariable', 'var' then local_set(Text.keyword_string(argument), Text.argument_string(argument))
-          when 'js' then run_js(substitute(argument))
-          when 'jscall' then run_jscall(substitute(argument))
-          when 'action' then do_action(substitute(argument))
-          else send_text(substitute(command))
-          end
+          dispatch_action_command(command, match)
+          break if @action_jumped
         end
+      end
+
+      # Execute one ';'-split action-body command. Mirrors run_script_row's verb set for
+      # the commands that appear in action bodies (Genie's EvalAction dispatches the full
+      # row grammar). goto/math/shift/if were the gaps: `math`/`shift`/`if` used to fall
+      # through to `else` and get sent to the GAME verbatim -- `action math <ctr> add 1`
+      # (common in commoncombattriggers) counted nothing and spammed the game with "math".
+      def dispatch_action_command(command, match)
+        if command.start_with?('#')
+          @router.route(substitute(command))
+          return
+        end
+
+        keyword = Text.keyword_string(command).downcase
+        argument = Text.argument_string(command)
+        case keyword
+        when 'goto' then action_goto(argument)
+        when 'echo' then echo_line(argument)
+        when 'put', 'send' then send_text(substitute(argument))
+        when 'setvariable', 'var' then local_set(Text.keyword_string(argument), Text.argument_string(argument))
+        when 'math' then math_into(Text.keyword_string(argument), Text.argument_string(argument))
+        when 'shift' then do_shift
+        when 'if' then action_if(command, match)
+        when 'js' then run_js(substitute(argument))
+        when 'jscall' then run_jscall(substitute(argument))
+        when 'action' then do_action(substitute(argument))
+        else send_text(substitute(command))
+        end
+      end
+
+      def action_goto(argument)
+        target = @program.labels[argument.strip.downcase]
+        return unless target
+
+        @action_jumped = true
+        @action_jump_target = target
+      end
+
+      # `if (cond) then <command>` inside an action body (the corpus uses
+      # `action (move) if (%movewait = 0) then shift`). The condition is re-substituted +
+      # evaluated live; a true result runs the THEN command back through the same dispatch
+      # (so it may be shift/math/put/#...). Only the one-line form occurs in actions.
+      def action_if(command, match)
+        condition, then_command = command.sub(/\A\s*if\b/i, '').split(/\s+then\s+/i, 2)
+        return if then_command.nil? || then_command.strip.empty?
+        return unless @eval.do_eval(substitute(condition.to_s.strip))
+
+        resolved = then_command.strip.gsub(/\$(\d+)/) { match[Regexp.last_match(1).to_i].to_s }
+        dispatch_action_command(resolved, match)
       end
 
       def consume_action_jump

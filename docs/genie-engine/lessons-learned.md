@@ -452,6 +452,25 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   `\$`->`$` and runs the $-arg pass first; both are single-application). LESSON: a failing property is
   as often a mis-stated invariant as a bug -- confirm the property reflects Genie's actual behavior
   before "fixing" the code.
+- **P2 feature gaps: corpus frequency decides scope (v0.10.0).** Grepped the 1500-script corpus for
+  each P2 verb before touching anything -- the counts flipped the priority order and prevented wasted
+  work. (1) `waiteval` (5 uses, was a SILENT no-op) IMPLEMENTED: Genie re-checks the condition on a
+  VARIABLE CHANGE (Script.cs:1443 TriggerVariableChanged), but every real corpus use references LIVE
+  vars ($roomid/$scriptlist) that move with the stream, so re-evaluating the raw (re-substituted)
+  condition per incoming line is the observable equivalent -- reused resume_line. (2) `execute_action`
+  if/math/shift IMPLEMENTED: `action math <ctr> add 1` is common (commoncombattriggers, included
+  everywhere) and used to fall through to the game as literal "math ..." -- a real bug hiding in a
+  "partial" note. (3) `#queue` looked like a big port (144 uses, "companion to #script") but the
+  corpus is 144/144 `#queue clear` with ZERO populate sites: scripts only defensively clear a queue
+  that, in an engine sending immediately, never fills -- so a recognized no-op is correct and a full
+  CommandQueue would be wasted. (4) `wait`/`move` DEFERRED despite being the highest-frequency verbs
+  (711/367): faithful prompt/room-change semantics (Script.cs EvalWait resumes on TriggerPrompt,
+  EvalMove on TriggerMove) need signals plumbed from the Lich glue AND a tester to confirm no combat
+  regression -- exactly the script-flow layer the tester-once replay fixture is for; the working
+  prototype (resume-on-next-line) stays until then. LESSON: "implement the P2 gaps" is really
+  "measure each gap first" -- frequency turns a scary-looking item (#queue) into a one-liner and a
+  one-line note (action math) into the highest-value fix, and tells you which gap is too risky to
+  touch without the tester.
 
 ## DR game-state (the big surprises)
 - **`XMLData` is shared GS/DR.** DR-specific state lives in DR modules.
