@@ -8,20 +8,25 @@ require_relative '../../../lib/genie'
 # The scripts are NOT committed (they were shared privately / are third-party), so
 # each example SKIPS unless the file exists locally. On a machine that has them
 # (e.g. the maintainer's), this asserts the lexer keeps 100% parse coverage --
-# zero unknown-command warnings after includes are resolved. Point at a different
-# checkout with GENIE_CORPUS_ROOT / GENIE_DOWNLOADS.
+# zero unknown-command warnings after includes are resolved.
+#
+# Roots (override with env vars):
+#   GENIE_CORPUS_ROOT (~/repos)                 -> Mastercraft + DR-Genie-Scripts
+#   GENIE_LAB (~/genie-port-lab/scripts)        -> tirost/ + ubercombat/ (moved here
+#                                                  from the old ~/Downloads layout)
 RSpec.describe 'Genie real-world corpus (local, skipped if absent)' do
   repo = ENV['GENIE_CORPUS_ROOT'] || File.expand_path('~/repos')
-  downloads = ENV['GENIE_DOWNLOADS'] || File.expand_path('~/Downloads')
+  lab  = ENV['GENIE_LAB'] || File.expand_path('~/genie-port-lab/scripts')
 
-  tirost = File.join(downloads, 'genie-scripts', 'Tirost')
+  tirost     = File.join(lab, 'tirost')
+  ubercombat = File.join(lab, 'ubercombat')
 
   search_dirs = [
     File.join(repo, 'DR-Genie-Scripts'),
     File.join(repo, 'DR-Genie-Scripts', 'GenieHunter'),
     File.join(repo, 'Mastercraft'),
     tirost,
-    downloads
+    ubercombat
   ]
 
   include_loader = lambda do |name|
@@ -42,8 +47,8 @@ RSpec.describe 'Genie real-world corpus (local, skipped if absent)' do
     'Mastercraft (MC_Setup.cmd)'    => File.join(repo, 'Mastercraft', 'MC_Setup.cmd'),
     'GenieHunter (hunt.cmd)'        => File.join(repo, 'DR-Genie-Scripts', 'GenieHunter', 'hunt.cmd'),
     'GenieHunter (gh_setup.cmd)'    => File.join(repo, 'DR-Genie-Scripts', 'GenieHunter', 'gh_setup.cmd'),
-    'ubercombat (uber.cmd)'         => File.join(downloads, 'uber.cmd'),
-    'ubercombat (uberwatch.cmd)'    => File.join(downloads, 'uberwatch.cmd'),
+    'ubercombat (uber.cmd)'         => File.join(ubercombat, 'uber.cmd'),
+    'ubercombat (uberwatch.cmd)'    => File.join(ubercombat, 'uberwatch.cmd'),
     'Tirost (sc.cmd + includes)'    => File.join(tirost, 'sc.cmd'),
     'Tirost (spellbook.cmd)'        => File.join(tirost, 'spellbook.cmd')
   }.each do |label, path|

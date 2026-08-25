@@ -471,6 +471,25 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   "measure each gap first" -- frequency turns a scary-looking item (#queue) into a one-liner and a
   one-line note (action math) into the highest-value fix, and tells you which gap is too risky to
   touch without the tester.
+- **Corpus audits closed two "unless a script needs it" P2 items + found one real dep (v0.10.0).**
+  (1) Non-js_arrays JS: the ONLY `.js` include in the whole corpus is `js_arrays.js` (11x) and every
+  `js`/`jscall` call is one of the 17 js_arrays functions we already implement -- no other JS lib,
+  no gap. (2) `#plugin` verb: 1 occurrence, COMMENTED OUT (`# put #plugin load TimeTracker.dll`).
+  BUT the plugin-var scan (`\$Xxx.Yyy` namespaces) surfaced the real dependency example-based specs
+  miss: `$Time.*` (isDay + isXibarUp/isYavashUp/isKatambaUp, read ~125x) is the TimeTracker plugin's
+  day/night + 3-moon state. Distinguishing plugin-data from user vars = compare SET-by-#var vs READ
+  counts (e.g. `$MC` set 30 / read 224 with the sets being the script's own writes = user vars;
+  `$Attunement` set 0 / read 107 = a read-only EXPTracker skill var). Lich already tracks the
+  TimeTracker data in `common-moonmage.rb` (`UserVars.moons['visible']` + `UserVars.sun['day']`,
+  populated by moonwatch.lic), so a reserved-var bridge (SpellTimer pattern) maps `$Time.*` 1:1.
+  LESSON: audit plugin deps by variable NAMESPACE + set/read ratio, not just the `#plugin` verb --
+  the dependency hides in the vars the scripts READ, not in a load command.
+- **corpus_coverage_spec was silently skipping (v0.10.0).** It pointed at the pre-move
+  `~/Downloads/genie-scripts/Tirost` + `~/Downloads/uber.cmd`, so 4 of 9 examples `skip`ped -- a
+  green suite that wasn't actually checking the two biggest real scripts. Repointed to the
+  `~/genie-port-lab/scripts/{tirost,ubercombat}` home via a `GENIE_LAB` env root; all 9 now run.
+  LESSON: a `skip "not present"` guard turns a moved-fixture path into invisible coverage loss --
+  grep specs for `skip` when fixtures relocate.
 
 ## DR game-state (the big surprises)
 - **`XMLData` is shared GS/DR.** DR-specific state lives in DR modules.

@@ -86,10 +86,23 @@ genuinely need a tester are quarantined at the bottom. Keep this updated as we g
       there's nothing to leak and `#queue clear` is a satisfied no-op; recognized in command_router
       (`do_queue`) so it no longer emits a stray FE hook. A populate subcommand (none in corpus)
       announces unsupported. A real CommandQueue port would be wasted effort for 0 populate sites.
-- [ ] **Non-`js_arrays` JavaScript.** `#js`/`#jscall` cover the `js_arrays` library natively;
-      any OTHER JS `announce`s as unsupported. Fine unless a corpus script needs more (audit).
-- [ ] **`#plugin` / `#pluginscript`.** Announce-only (no plugin host). Confirm nothing in the
-      corpus depends on a specific plugin beyond EXPTracker/SpellTimer (already bridged).
+- [x] **Non-`js_arrays` JavaScript -> AUDITED v0.10.0, NO GAP.** Corpus scan: the ONLY `.js`
+      include anywhere is `js_arrays.js` (11x), and every `js`/`jscall` call is a js_arrays
+      function (checkExists/doConcat/doInsert/doPop/doPush/doRemove/doReplace/doShift/doSort/
+      doUnshift/doXCompare/findIndex/findMax/findMaxGlobal/findMin/findMinGlobal/zipArrays) -- all
+      17 are implemented in `lib/genie/js_arrays.rb`. No other JS library is used. Closed.
+- [x] **`#plugin` / `#pluginscript` verb -> AUDITED v0.10.0, effectively unused.** Only 1 corpus
+      occurrence and it is COMMENTED OUT (`# put #plugin load TimeTracker.dll` in uber.cmd). No live
+      `#plugin` verb usage. BUT the audit surfaced ONE real plugin-DATA dependency beyond EXPTracker/
+      SpellTimer -> see the `$Time.*` bridge item below.
+- [ ] **Bridge `$Time.*` (TimeTracker plugin) -> moonwatch (found by the #plugin audit).** Scripts
+      read `$Time.isDay` (50x) + `$Time.isXibarUp`/`isYavashUp`/`isKatambaUp` (25x each) -- day/night
+      + the three DR moons up/down, gating hunting/spellcasting. In native Genie these come from the
+      TimeTracker plugin. Lich already tracks exactly this via `common-moonmage.rb`
+      (`UserVars.moons['visible']` per-moon + `UserVars.sun['day']`, populated by moonwatch.lic). A
+      LichGameState reserved-var bridge (like SpellTimer/skills, via a pure `Reserved.time_var`
+      helper) maps them 1:1. Self-serviceable code; runtime needs moonwatch.lic running (same model
+      as SpellTimer needing its data source; DRCMM even auto-starts it).
 
 ## P3 — Known divergences (documented; decide fix vs leave)
 
@@ -123,9 +136,11 @@ genuinely need a tester are quarantined at the bottom. Keep this updated as we g
 
 ## P4 — Robustness / infra / housekeeping
 
-- [ ] **Fix `corpus_coverage_spec.rb` paths.** It reads `~/Downloads/genie-scripts/Tirost`
-      (moved to `genie-port-lab/scripts/tirost`) -> Tirost cases now skip. Repoint (or honor a
-      `GENIE_DOWNLOADS`/new env var) so the corpus coverage specs actually run.
+- [x] **Fix `corpus_coverage_spec.rb` paths -> DONE v0.10.0.** Repointed Tirost + ubercombat to
+      `~/genie-port-lab/scripts/{tirost,ubercombat}` (moved there) via a new `GENIE_LAB` env root;
+      Mastercraft/DR-Genie-Scripts stay under `GENIE_CORPUS_ROOT`. All 9 coverage examples now RUN
+      (were 4 skipping) and pass: 0 unknown-command warnings across sc/spellbook/uber/uberwatch/
+      mastercraft/mc_include/MC_Setup/hunt/gh_setup.
 - [ ] **`.cfg` importer.** Migrate a real Genie `variables.cfg`/config tree (partial today).
 - [ ] **gag/sub class-gating.** Stream filters don't yet honor `#class` on/off (triggers +
       actions do).
