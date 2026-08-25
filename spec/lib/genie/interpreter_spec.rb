@@ -515,6 +515,20 @@ RSpec.describe Lich::Genie::Interpreter do
       expect(result[:echoes]).to eq(['n=5'])
       expect(result[:commands]).to be_empty # math/if handled locally, nothing leaked to the game
     end
+
+    # $scriptlist carries extension-less names (Genie's GetFileNameWithoutExtension), so a
+    # `foo\.cmd` pattern never matches it -- in Genie too. This locks that parity quirk
+    # (swimhaven.cmd's `waiteval !matchre("$scriptlist","automapper\.cmd")` resumes at once)
+    # and guards against a well-meaning "fix" that adds .cmd to the list.
+    it 'waiteval reads $scriptlist, whose extension-less names a .cmd pattern cannot match' do
+      source = <<~'GENIE'
+        waiteval !matchre("$scriptlist", "automapper\.cmd")
+        echo done
+        exit
+      GENIE
+      result = run_script(source, input_lines: ['tick'], game_state: { 'scriptlist' => 'automapper|hunt' })
+      expect(result[:echoes]).to eq(['done'])
+    end
   end
 
   # Runtime crash hardening surfaced by the corpus execute-sweep: three unguarded

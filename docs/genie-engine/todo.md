@@ -63,7 +63,8 @@ genuinely need a tester are quarantined at the bottom. Keep this updated as we g
       -- all reference LIVE/reserved vars that move with the stream, so we re-evaluate the RAW
       (re-substituted) condition on each incoming line via resume_line (Genie re-checks on a variable
       change; per-line is the observable equivalent). `waiteval_satisfied?` in interpreter.rb. NOTE:
-      swimhaven's `$scriptlist` is still stubbed to 'none' (separate gap), so that one resumes early.
+      swimhaven's `$scriptlist` is now REAL (v0.10.4, see P4) -- but its `automapper\.cmd` pattern
+      still never matches the extension-less list, so that waiteval resumes at once IN GENIE TOO.
 - [ ] **`wait` / `move` / `nextroom` are prototype (DEFERRED, needs tester).** They resume on the
       next LINE; Genie's `wait` resumes on the next PROMPT (TriggerPrompt) and `move` on a ROOM
       CHANGE (TriggerMove) -- Script.cs:1573/1621, EvalWait/EvalMove. Faithful semantics need (a)
@@ -148,6 +149,15 @@ genuinely need a tester are quarantined at the bottom. Keep this updated as we g
       Mastercraft/DR-Genie-Scripts stay under `GENIE_CORPUS_ROOT`. All 9 coverage examples now RUN
       (were 4 skipping) and pass: 0 unknown-command warnings across sc/spellbook/uber/uberwatch/
       mastercraft/mc_include/MC_Setup/hunt/gh_setup.
+- [x] **`$scriptlist` stub -> REAL v0.10.4.** Was hard-coded `'none'`. Now
+      `LichGameState.script_list`: `|`-joined names of running GenieScript (.cmd) instances, or
+      "none" when empty -- a faithful port of Genie's SetScriptListVariable (FormMain.cs:4270),
+      including GetFileNameWithoutExtension (names carry NO extension; GenieScript#name already is
+      the extension-less basename) and the "none" fallback. Marked `authoritative?` (Genie rewrites
+      it every tick; 0 corpus scripts shadow it). GenieScript-scoped for parity (native Genie only
+      saw its own scripts) + consistency with `#script abort all`. e2e regression locks the parity
+      quirk that a `foo\.cmd` pattern never matches the extension-less list (swimhaven's waiteval
+      resumes at once -- in Genie too).
 - [ ] **`.cfg` importer.** Migrate a real Genie `variables.cfg`/config tree (partial today).
 - [x] **gag/sub class-gating -> DONE v0.10.2.** Stream filters now honor `#class` on/off exactly
       like triggers: Gag/Sub carry an `active` flag (default true), `StreamFilters#set_class(name,

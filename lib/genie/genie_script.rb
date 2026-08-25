@@ -567,7 +567,7 @@ module Lich
         'monsterlist' => -> { LichGameState.room_creatures.join('|') },
         # misc reserved
         'prompt' => -> { XMLData.prompt }, 'zoneid' => -> { 0 }, 'zonename' => -> { 0 },
-        'scriptlist' => -> { 'none' }, 'spelltime' => -> { 0 }, 'spellpreptime' => -> { 0 },
+        'scriptlist' => -> { LichGameState.script_list }, 'spelltime' => -> { 0 }, 'spellpreptime' => -> { 0 },
         'repeatregex' => lambda {
           '^\.\.\.wait|^Sorry\, you may only type ahead|^You are still stunned|' \
           '^You can\'t do that while|^You don\'t seem to be able'
@@ -602,6 +602,23 @@ module Lich
         XMLData.room_title.to_s.gsub(/\A\[+/, '').gsub(/\]+\z/, '')
       end
 
+      # Genie's $scriptlist: `|`-joined names of running scripts, or "none" when empty
+      # (FormMain.SetScriptListVariable, FormMain.cs:4270). Genie uses
+      # GetFileNameWithoutExtension, so names carry NO extension -- GenieScript#name is
+      # already the extension-less basename, so this matches byte-for-byte (incl. the
+      # quirk that `matchre($scriptlist, "foo\.cmd")` never matches, in Genie too).
+      # Scoped to running GenieScript (.cmd) instances -- native Genie only ever saw its
+      # own scripts, not Lich .lic scripts -- consistent with `#script abort all`.
+      def self.script_list
+        names = Lich::Common::Script.running
+                                    .select { |script| script.is_a?(GenieScript) }
+                                    .map(&:name)
+                                    .reject { |name| name.to_s.empty? }
+        names.empty? ? 'none' : names.join('|')
+      rescue StandardError
+        'none'
+      end
+
       def key?(name)
         key = name.to_s.downcase
         RESOLVERS.key?(key) || !Reserved.indicator_check(key).nil? ||
@@ -620,7 +637,7 @@ module Lich
       # scripts shadow some (e.g. `#var inside 1`) and expect their #var to stick.
       def authoritative?(name)
         Reserved.spell_timer?(name) || (skills_available? && Reserved.skill_var?(name)) ||
-          (time_available? && Reserved.time_var?(name))
+          (time_available? && Reserved.time_var?(name)) || name.to_s.casecmp?('scriptlist')
       end
 
       def [](name)

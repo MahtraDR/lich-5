@@ -527,6 +527,18 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   in a fix -- sometimes it ends in a QUANTIFIED, bounded, justified non-fix + a permanent guard
   fuzzer; measuring "~78% on inputs that never occur" is what converts a scary TODO into a closed
   decision.
+- **`$scriptlist` made real (v0.10.4) -- and reading the source revealed the "fix" is a no-op for
+  its one corpus user.** Was stubbed `'none'`; now `LichGameState.script_list` ports Genie's
+  SetScriptListVariable (FormMain.cs:4270) faithfully: `|`-joined running-script names via
+  GetFileNameWithoutExtension (NO extension) or "none". The surprise: swimhaven.cmd's
+  `waiteval !matchre("$scriptlist","automapper\.cmd")` can NEVER match, because Genie's list holds
+  "automapper" (no .cmd) -- so that waiteval resumes immediately in native Genie too. Strict parity
+  therefore means keeping the extension OFF (not "helpfully" adding .cmd to make the script's intent
+  work) -- the script is simply buggy, and we replicate the bug. Marked authoritative (Genie rewrites
+  it each tick; 0 corpus scripts shadow it), GenieScript-scoped like `#script abort all`. LESSON:
+  before "fixing" a stub, read how the SOURCE builds it AND how the one caller consumes it -- the
+  faithful value here (extension-less) is the one that makes the caller's pattern fail, which is
+  exactly right per strict parity.
 
 ## DR game-state (the big surprises)
 - **`XMLData` is shared GS/DR.** DR-specific state lives in DR modules.
