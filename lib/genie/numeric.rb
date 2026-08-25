@@ -12,8 +12,21 @@ module Lich
       # a non-ASCII char) while emitting exactly what Genie's double.ToString() produces.
       INFINITY_SIGN = [0x221E].pack('U')
 
-      # Port of Utility.StringToDouble: en-US parse, returns -1.0 (NOT 0) on
-      # empty/nil/parse-failure. Tolerates thousands separators like .NET.
+      # The grammar .NET's `double.Parse(s, en-US)` accepts under its default
+      # NumberStyles (Float | AllowThousands): an optional sign, then digits with
+      # lenient `,` group separators in the INTEGER part only (`1,23`, `12,34`,
+      # `1,,2` all parse), an optional fraction, and an optional exponent -- OR a
+      # leading-dot fraction (`.5`). Verified against the real evaluator via the s2d
+      # oracle. Validating with this FIRST is what keeps us faithful: Ruby's `Float()`
+      # would otherwise (wrongly, vs Genie) accept `0x1F`->31, `1_000`->1000, and
+      # `Infinity`, and would misparse `1.5,3` instead of rejecting it.
+      S2D_GRAMMAR = /\A[+-]?(?:\d[\d,]*(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\z/
+      # .NET parses "NaN" (case-insensitive, optional sign) to NaN, but NOT "Infinity".
+      S2D_NAN = /\A[+-]?nan\z/i
+
+      # Port of Utility.StringToDouble (Utility.cs:609): en-US `double.Parse`, returning
+      # -1.0 (NOT 0) on nil/failure. This drives numeric COMPARISONS in Eval, so a
+      # too-lenient parse changes real script branching (e.g. comparing `0x1F`).
       #
       # @param str [String, nil]
       # @return [Float]
@@ -21,17 +34,12 @@ module Lich
         return -1.0 if str.nil?
 
         s = str.to_s.strip
-        return -1.0 if s.empty?
+        return Float::NAN if s.match?(S2D_NAN)
+        return -1.0 unless s.match?(S2D_GRAMMAR)
 
-        begin
-          Float(s)
-        rescue ArgumentError, TypeError
-          begin
-            Float(s.delete(','))
-          rescue ArgumentError, TypeError
-            -1.0
-          end
-        end
+        Float(s.delete(','))
+      rescue ArgumentError, TypeError
+        -1.0
       end
 
       # @return [Boolean] whether the whole (trimmed) string parses as a number,

@@ -23,9 +23,16 @@ genuinely need a tester are quarantined at the bottom. Keep this updated as we g
       never threw) -> REWROTE as a faithful substring port (keeps quirks: negative depth, quotes
       active inside braces, lone-quote THROW, underscore-gates-first-token). 40k cases x2 modes,
       0 divergences; 16 regressions in text_spec.rb. See lessons-learned.md.
-- [ ] **`StringToDouble` / `ToInteger` / `ToLong` fuzzer.** Number parsing + banker's-rounding
-      edges (thousands separators, leading/trailing junk, signs). `Utility.cs` includable;
-      add oracle modes and fuzz vs `Numeric.*`.
+- [x] **`StringToDouble` / `ToInteger` / `ToLong` fuzzer. DONE v0.9.8.** Oracle modes `s2d`
+      (Utility.StringToDouble), `toint` (Conversions.ToInteger), `tolong` (Conversions.ToLong);
+      `reference/fuzz_numeric.rb`. FIXED `Numeric.string_to_double`: the old `Float()`-based parse
+      was too lenient vs .NET double.Parse(en-US) -- wrongly accepted `0x1F`->31, `1_000`->1000,
+      `Infinity`, and misparsed `1.5,3`; missed `NaN`. Rewrote with an explicit .NET grammar
+      (lenient `,` groups in the INTEGER part only, case-insensitive `nan`, no hex/underscore/
+      Infinity) -> 20k s2d cases x5 seeds = 0 diffs; no regression in math/format/eval fuzzers.
+      `to_integer`/`to_long` VALUE parity is exact; their only diffs are overflow/non-numeric where
+      C# THROWS -- left lenient (reconciled at call sites: `\` overflow-checks Int64 in math_eval,
+      substr clamps) -> see P3. 7 regressions added to numeric_spec.rb.
 - [ ] **Extend `fuzz_eval.rb` to `match`/`matchre`/`replacere`.** Regex + capture-group parity
       (deliberately excluded so far). Watch for catastrophic-backtracking hangs on the oracle.
 - [ ] **Corpus execute-sweep (runtime robustness).** Beyond `corpus_sweep.rb` (compile only):
@@ -65,6 +72,14 @@ genuinely need a tester are quarantined at the bottom. Keep this updated as we g
       (its tokenizer rejects them, inconsistently — `1e28` behaved differently); ours raises ->
       evalmath rescues to `'0'`, so the `#evalmath` END result matches. Low priority; investigate
       Genie's actual tokenizer behavior via the oracle before touching our lexer.
+- [ ] **`Conversions.ToInteger`/`ToLong` throw vs our leniency (v0.9.8).** VB Conversions THROW on
+      a non-numeric string (InvalidCastException) or an out-of-range value (OverflowException:
+      >Int32 for ToInteger, >Int64 for ToLong); our `Numeric.to_integer`/`to_long` stay lenient
+      (-1 for unparseable, a Ruby bignum for large). VALUE parity is exact (fuzz_numeric: 0 value
+      diffs); only the throw-cases differ. Reconciled/edge at every call site: `\` already
+      Int64-overflow-checks (math_eval), substr clamps (the substr-out-of-range item above),
+      round-digits/factorial/element take small integers. Decision: leave lenient (like substr) --
+      the script-level effect of Genie's throw is unobservable from the isolated evaluator.
 - [ ] **`count(s, "")` (empty needle).** INFINITE LOOP in Genie4's own Eval.cs (hangs the
       oracle); ours returns cleanly. A Genie bug — decision: do NOT replicate (leave documented).
 

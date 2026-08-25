@@ -11,8 +11,12 @@ RSpec.describe Lich::Genie::Numeric do
       expect(described_class.string_to_double('1e3')).to eq(1000.0)
     end
 
-    it 'tolerates thousands separators' do
+    it 'tolerates thousands separators leniently in the integer part (like .NET)' do
       expect(described_class.string_to_double('1,000')).to eq(1000.0)
+      expect(described_class.string_to_double('1,23')).to eq(123.0)     # grouping not validated
+      expect(described_class.string_to_double('1,2,3.5')).to eq(123.5)
+      expect(described_class.string_to_double('1,,2')).to eq(12.0)      # doubled comma ok
+      expect(described_class.string_to_double('5,')).to eq(5.0)         # trailing ok
     end
 
     it 'returns -1.0 (not 0) on empty/nil/parse failure' do
@@ -21,6 +25,34 @@ RSpec.describe Lich::Genie::Numeric do
       expect(described_class.string_to_double('   ')).to eq(-1.0)
       expect(described_class.string_to_double('abc')).to eq(-1.0)
       expect(described_class.string_to_double('5px')).to eq(-1.0)
+    end
+
+    # These are the divergences the old Float()-based parse got wrong: Ruby's Float()
+    # accepts hex/underscores/"Infinity" and misparses a comma after the decimal, none
+    # of which .NET's double.Parse(en-US) does. All confirmed against the s2d oracle.
+    it 'rejects forms .NET does not accept (were wrongly parsed before)' do
+      expect(described_class.string_to_double('0x1F')).to eq(-1.0)  # Ruby Float would give 31.0
+      expect(described_class.string_to_double('1_000')).to eq(-1.0) # Ruby Float would give 1000.0
+      expect(described_class.string_to_double('Infinity')).to eq(-1.0)
+      expect(described_class.string_to_double('1.5,3')).to eq(-1.0) # comma after decimal
+      expect(described_class.string_to_double(',5')).to eq(-1.0)    # leading comma
+      expect(described_class.string_to_double('+-5')).to eq(-1.0)
+      expect(described_class.string_to_double('1.2.3')).to eq(-1.0)
+    end
+
+    it 'parses "NaN" case-insensitively (with optional sign), like .NET' do
+      expect(described_class.string_to_double('NaN').nan?).to be(true)
+      expect(described_class.string_to_double('nan').nan?).to be(true)
+      expect(described_class.string_to_double('-nan').nan?).to be(true)
+    end
+
+    it 'parses leading-dot / trailing-dot / signed fractions and exponents' do
+      expect(described_class.string_to_double('.5')).to eq(0.5)
+      expect(described_class.string_to_double('5.')).to eq(5.0)
+      expect(described_class.string_to_double('+.5')).to eq(0.5)
+      expect(described_class.string_to_double('1E+5')).to eq(100_000.0)
+      expect(described_class.string_to_double('1e999')).to eq(Float::INFINITY)
+      expect(described_class.string_to_double('.')).to eq(-1.0)
     end
   end
 
@@ -39,6 +71,26 @@ RSpec.describe Lich::Genie::Numeric do
       expect(described_class.to_integer(3.5)).to eq(4)
       expect(described_class.to_integer(-2.5)).to eq(-2)
       expect(described_class.to_integer('4.5')).to eq(4)
+    end
+
+    # Value parity with VB Conversions.ToInteger is exact (verified via the `toint`
+    # oracle over 20k inputs). DELIBERATE divergence: where C# would THROW -- a
+    # non-numeric string or a value beyond Int32 -- this helper stays lenient (-1 for
+    # unparseable via string_to_double; a Ruby arbitrary-precision Integer for large
+    # values). Genie's throw is reconciled at the call sites (substr clamps -- the
+    # documented substr-out-of-range item; `\` overflow-checks to Int64 in math_eval),
+    # so we match Genie where a value is produced and don't crash on the edges.
+    it 'is lenient (does not raise) where Conversions.ToInteger would throw' do
+      expect(described_class.to_integer('abc')).to eq(-1) # C#: InvalidCastException
+      expect(described_class.to_integer('3000000000')).to eq(3_000_000_000) # C#: OverflowException
+    end
+  end
+
+  describe '.to_long' do
+    it 'banker\'s-rounds like to_integer and shares its value parity with Conversions.ToLong' do
+      expect(described_class.to_long('4.5')).to eq(4)
+      expect(described_class.to_long(2.5)).to eq(2)
+      expect(described_class.to_long('1,000')).to eq(1000)
     end
   end
 

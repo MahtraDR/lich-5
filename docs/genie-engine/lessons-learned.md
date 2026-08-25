@@ -391,6 +391,27 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   "boring" tokenizer that "looks right" and passes example specs can be wrong in half a dozen
   ways a char-buffer reimplementation invents; port the ACTUAL algorithm (substring semantics),
   and let the oracle prove it.
+- **`Numeric.string_to_double` was too lenient -- rewrote to .NET's grammar (v0.9.8).** Oracle
+  modes `s2d` (Utility.StringToDouble), `toint`/`tolong` (VB Conversions.ToInteger/ToLong; needs
+  `Microsoft.VisualBasic.CompilerServices`), fuzzed by `reference/fuzz_numeric.rb`. The old
+  `Float(s) rescue Float(s.delete(','))` leaned on Ruby's `Float()`, which accepts things .NET's
+  `double.Parse(en-US, Float|AllowThousands)` does NOT: `0x1F`->31 (hex), `1_000`->1000
+  (underscores), `Infinity`; and it MISPARSED `1.5,3`->1.53 (a comma after the decimal, which .NET
+  rejects) and MISSED `NaN` (.NET parses it, case-insensitive, optional sign; but NOT "Infinity"
+  text). Because string_to_double drives numeric COMPARISONS in Eval (`0x1F < 5` etc.), the
+  leniency changed real branching. Rewrote with an explicit grammar: `\A[+-]?(?:\d[\d,]*(?:\.\d*)?
+  |\.\d+)(?:[eE][+-]?\d+)?\z` (commas only in the INTEGER part, .NET-lenient about grouping:
+  `1,23`/`12,34`/`1,,2` all parse) plus a `\A[+-]?nan\z/i` special-case, validate FIRST, then strip
+  commas and `Float()`. 20k s2d cases x5 seeds = 0 diffs; math/format/eval fuzzers unregressed.
+  `to_integer`/`to_long` VALUE parity with Conversions is exact (banker's rounding + parse); their
+  ONLY diffs are the cases where C# THROWS -- non-numeric (InvalidCastException) or out-of-range
+  (OverflowException: >Int32 for ToInteger, >Int64 for ToLong). Left lenient (-1 / Ruby bignum),
+  matching the substr-out-of-range precedent: the throw is reconciled or edge at every call site
+  (`\` already Int64-overflow-checks in math_eval#integer_divide; substr clamps; round-digits/
+  factorial/element take small ints), and the script-level effect of Genie's throw is unobservable
+  from the isolated evaluator. LESSON: a "tolerant" parse helper that delegates to the host
+  language's parser silently inherits that parser's grammar (Ruby Float's hex/underscore/Infinity)
+  -- pin the SOURCE runtime's grammar explicitly and fuzz it.
 
 ## DR game-state (the big surprises)
 - **`XMLData` is shared GS/DR.** DR-specific state lives in DR modules.
