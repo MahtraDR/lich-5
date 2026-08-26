@@ -128,9 +128,18 @@ module Lich
       end
 
       # BUG FIX: Added nil guard - find_skill can return nil if skill not found
+      #
+      # Mastered skills (rank >= 1750) are pinned to 34/34 the same way
+      # `initialize` and `update` do it. The game continuously streams an empty
+      # exp component for a capped skill (its mindstate sits at clear/0), which
+      # routes here; without the cap guard that pulse would reset exp to 0 and
+      # defeat the "capped == 34" convention that trainer scripts rely on to
+      # avoid re-training a maxed skill.
       def self.clear_mind(val)
         skill = find_skill(val)
-        skill.exp = 0 if skill
+        return unless skill
+
+        skill.exp = skill.rank.to_i >= 1750 ? 34 : 0
       end
 
       # BUG FIX: Added nil guard - find_skill can return nil if skill not found
