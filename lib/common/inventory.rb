@@ -771,7 +771,20 @@ module Lich
       end
       private_constant :Assembly
 
-      @mutex         = Mutex.new
+      # +@mutex+ guards every mutation of shared read-model state (+@snapshot+,
+      # +@assemblies+, +@id_counter+, owned-container tracking) and is taken on both
+      # the parser thread (+route_response+) and script threads (+refresh+).
+      @mutex = Mutex.new
+
+      # +@refresh_mutex+ deliberately serializes +.refresh+ callers so only one
+      # continuation exchange is ever live at a time. This is a design choice, not a
+      # limitation to lift: an +inventoryManager+ exchange is stateful on the wire
+      # (an initial probe plus up to +MAX_CONCURRENT_CONTINUATIONS+ cursor-echoing
+      # continuation requests), so overlapping two exchanges would race unverified
+      # protocol state, and coalescing redundant concurrent refresh requests behind
+      # one exchange is the desirable behavior anyway. Minting the request id under
+      # +@mutex+ (see +refresh+) means lifting this serialization later would be
+      # id-collision-safe, should a concrete need for concurrent refreshes arise.
       @refresh_mutex = Mutex.new
 
       class << self
@@ -842,11 +855,17 @@ module Lich
           @refresh_mutex.synchronize do
             assembly = Assembly.new
             deadline = monotonic_now + timeout
-            initial  = generate_id
 
-            @mutex.synchronize do
-              assembly.pending[initial] = :initial
-              @assemblies[initial] = assembly
+            # +generate_id+ must be minted under +@mutex+, the same lock that guards
+            # the parser thread's +drain_queue+ call site -- otherwise the two call
+            # sites race on +@id_counter+ and could mint the same id. +@refresh_mutex+
+            # serializes callers today, but this keeps the invariant true once that
+            # serialization is relaxed (see the +@refresh_mutex+ note).
+            initial = @mutex.synchronize do
+              id = generate_id
+              assembly.pending[id] = :initial
+              @assemblies[id] = assembly
+              id
             end
             Game._puts("_inventory manager #{initial}")
 
@@ -963,15 +982,21 @@ module Lich
         #
         # @return [void]
         def reset!
-          @snapshot           = nil
-          @feed_seen          = false
-          @consecutive_timeouts = 0
-          @feed_absent_until  = nil
-          @absent_backoff     = PROBE_BACKOFF_BASE_SECONDS
-          @id_counter         = 0
-          (@assemblies ||= {}).clear
-          purge_owned_containers!
-          @owned_container_ids = Set.new
+          # Mutate shared state under +@mutex+, like every other mutator, so a
+          # reconnect handler calling this off the parser thread can't tear state
+          # out from under a still-draining +route_response+. +purge_owned_containers!+
+          # touches only GameObj's own lock, so there's no re-entrant deadlock here.
+          @mutex.synchronize do
+            @snapshot           = nil
+            @feed_seen          = false
+            @consecutive_timeouts = 0
+            @feed_absent_until  = nil
+            @absent_backoff     = PROBE_BACKOFF_BASE_SECONDS
+            @id_counter         = 0
+            (@assemblies ||= {}).clear
+            purge_owned_containers!
+            @owned_container_ids = Set.new
+          end
         end
 
         private

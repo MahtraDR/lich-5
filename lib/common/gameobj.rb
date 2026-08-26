@@ -215,7 +215,16 @@ module Lich
       #
       # @return [String, nil]
       def type
-        GameObj.load_data if @@type_data.empty?
+        # +load_data+ nils +@@type_data+ (not +{}+) when the data file is missing
+        # or corrupt, and returns false rather than raising. Only attempt the load
+        # from the pristine +{}+ state (+nil&.empty?+ is falsy, so a failed load
+        # isn't retried on every call -- it echoes its error once, then degrades),
+        # and guard the lookup so a broken +gameobj-data.xml+ yields +nil+ instead
+        # of crashing every +#type+ caller -- including every Inventory::Item,
+        # which now exposes this as public API.
+        GameObj.load_data if @@type_data&.empty?
+        return nil if @@type_data.nil?
+
         cache_key = "#{@noun}|#{@name}|#{full_name}"
         return @@type_cache[cache_key] if @@type_cache.key?(cache_key)
 
@@ -235,7 +244,11 @@ module Lich
       #
       # @return [String, nil]
       def sellable
-        GameObj.load_data if @@sellable_data.empty?
+        # See +#type+: degrade to +nil+ (loudly once, then quietly) when the data
+        # file is missing/corrupt rather than raising on +nil.empty?+/+nil.keys+.
+        GameObj.load_data if @@sellable_data&.empty?
+        return nil if @@sellable_data.nil?
+
         matches = matching_data_keys(@@sellable_data)
         matches.empty? ? nil : matches.join(',')
       end

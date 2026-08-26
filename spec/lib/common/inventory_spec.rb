@@ -44,6 +44,12 @@ RSpec.describe Lich::Common::Inventory do
     end
     g.class_variable_set(:@@right_hand, nil)
     g.class_variable_set(:@@left_hand, nil)
+    # Reset the classification data to its pristine "not yet loaded" state too.
+    # The fixture-loading examples populate @@type_data/@@sellable_data via
+    # load_data, and (unlike @@type_cache above) nothing else clears them, so
+    # without this an example's outcome would depend on run order.
+    g.class_variable_set(:@@type_data, {})
+    g.class_variable_set(:@@sellable_data, {})
     described_class.reset!
   end
 
