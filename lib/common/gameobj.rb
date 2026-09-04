@@ -363,6 +363,67 @@ module Lich
         end
       end
 
+      # Upserts an inventory item by id for a PARTIAL (filtered) scrape -- e.g.
+      # +INV SEARCH <word>+ or +INV <category> full+, which list only the
+      # matching items and so must not clear unrelated inventory the way a full
+      # +INV LIST+ refresh does. Any prior placement of +id+ is removed from
+      # +@@inv+ and every +@@contents+ list first, so an item that moved
+      # containers (or whose name changed, e.g. gained "(closed)") is refreshed
+      # in exactly one place with neither a duplicate nor a stale copy left
+      # behind. It is then (re)placed via {.new_inv}: worn (+container+ nil) into
+      # +@@inv+, otherwise into +@@contents[container]+.
+      #
+      # Because a filtered scrape only reports matches, it can add or relocate
+      # items but can never prove an item is gone -- removals are left to the
+      # next full refresh.
+      #
+      # The removal runs under +@@index_mutex+ (the same lock +find_or_create+
+      # holds for registry writes) so it cannot race the off-thread
+      # +prune_index!+ sweep that walks +@@inv+/+@@contents+. It is a separate
+      # acquisition from the +new_inv+ that follows -- Ruby's Mutex is not
+      # reentrant, and +new_inv+ takes the lock itself -- so remove and re-add
+      # are not one atomic step; that is fine because the parser thread is the
+      # sole writer and a reader can at worst momentarily not see the item.
+      #
+      # @param id        [Integer, String]
+      # @param noun      [String, nil]
+      # @param name      [String, nil]
+      # @param container [String, nil]
+      # @param before    [String, nil]
+      # @param after     [String, nil]
+      # @return [GameObj]
+      def self.upsert_inv(id, noun, name, container = nil, before = nil, after = nil)
+        str_id = id.is_a?(Integer) ? id.to_s : id
+        remove_inv_item(str_id)
+        new_inv(str_id, noun, name, container, before, after)
+      end
+
+      # Removes every placement of +id+ from the worn inventory (+@@inv+) and
+      # from all container contents (+@@contents+). Used as the removal half of
+      # {.upsert_inv} and to reconcile the model when an item leaves inventory
+      # for a hand (a held item is neither worn nor in a container). Leaves
+      # +@@right_hand+/+@@left_hand+ and the shared identity index untouched.
+      #
+      # A +nil+ or empty id is an explicit no-op: empty hands stream a hand tag
+      # with no +exist+ id, so this is called constantly with +nil+, and matching
+      # +obj.id == nil+ would wrongly wipe any (future) nil-id entry -- and also
+      # scan the whole inventory for nothing. The +reject!+ runs under
+      # +@@index_mutex+ (the lock +find_or_create+ holds for registry writes) so
+      # it cannot race the off-thread prune sweep that walks these registries.
+      #
+      # @param id [Integer, String, nil]
+      # @return [void]
+      def self.remove_inv_item(id)
+        str_id = id.is_a?(Integer) ? id.to_s : id
+        return if str_id.nil? || str_id.empty?
+
+        @@index_mutex.synchronize do
+          @@inv.reject! { |obj| obj.id == str_id }
+          @@contents.each_value { |list| list.reject! { |obj| obj.id == str_id } }
+        end
+        nil
+      end
+
       # Creates and registers a new reserve slot item.
       #
       # +@@reserve+ is +nil+ until the first reserve stream is seen; thereafter
@@ -859,8 +920,8 @@ module Lich
           npc = @@npcs.find { |n| n.id == id }
           next unless npc
           next if npc.status.to_s =~ /dead|gone/i
-          next if npc.name  =~ /^animated\b/i && npc.name !~ /^animated slush/i
-          next if npc.noun  =~ /^(?:arm|appendage|claw|limb|pincer|tentacle)s?$|^(?:palpus|palpi)$/i &&
+          next if npc.name =~ /^animated\b/i && npc.name !~ /^animated slush/i
+          next if npc.noun =~ /^(?:arm|appendage|claw|limb|pincer|tentacle)s?$|^(?:palpus|palpi)$/i &&
                   npc.name !~ /(?:amaranthine|ghostly|grizzled|ancient) kraken tentacle/i
           npc
         end

@@ -136,6 +136,125 @@ RSpec.describe Lich::Common::GameObj do
     end
   end
 
+  describe '.upsert_inv' do
+    it 'adds a new item like new_inv when nothing pre-exists' do
+      described_class.upsert_inv('123', 'gem', 'ruby', 'container1')
+
+      expect(described_class.containers['container1'].map(&:id)).to eq(['123'])
+    end
+
+    it 'refreshes an item in place without duplicating it' do
+      described_class.new_inv('123', 'gem', 'ruby', 'container1')
+      described_class.upsert_inv('123', 'gem', 'ruby', 'container1')
+
+      expect(described_class.containers['container1'].count { |o| o.id == '123' }).to eq(1)
+    end
+
+    it 'moves an item to its new container, leaving no stale copy' do
+      described_class.new_inv('123', 'gem', 'ruby', 'container1')
+      described_class.new_inv('999', 'gem', 'opal', 'container1') # bystander stays
+
+      described_class.upsert_inv('123', 'gem', 'ruby', 'container2')
+
+      expect(described_class.containers['container1'].map(&:id)).to eq(['999'])
+      expect(described_class.containers['container2'].map(&:id)).to eq(['123'])
+    end
+
+    it 'removes a prior copy even when the name changed (e.g. gained "(closed)")' do
+      described_class.new_inv('123', nil, 'soft gem pouch', 'container1')
+      described_class.upsert_inv('123', nil, 'soft gem pouch (closed)', 'container1')
+
+      list = described_class.containers['container1']
+      expect(list.map(&:id)).to eq(['123'])
+      expect(list.first.name).to eq('soft gem pouch (closed)')
+    end
+
+    it 'relocates a contained item to worn inv when container is nil' do
+      described_class.new_inv('123', 'gem', 'ruby', 'container1')
+
+      described_class.upsert_inv('123', 'gem', 'ruby', nil)
+
+      expect(described_class.containers['container1'].map(&:id)).to eq([])
+      expect(described_class.inv.map(&:id)).to eq(['123'])
+    end
+
+    it 'converts an integer id to string' do
+      obj = described_class.upsert_inv(12345, 'gem', 'ruby')
+
+      expect(obj.id).to eq('12345')
+    end
+  end
+
+  describe '.remove_inv_item' do
+    it 'removes the id from a container' do
+      described_class.new_inv('123', 'gem', 'ruby', 'container1')
+      described_class.new_inv('999', 'gem', 'opal', 'container1') # bystander stays
+
+      described_class.remove_inv_item('123')
+
+      expect(described_class.containers['container1'].map(&:id)).to eq(['999'])
+    end
+
+    it 'removes the id from worn inv' do
+      described_class.new_inv('123', 'gem', 'ruby')
+
+      described_class.remove_inv_item('123')
+
+      expect(described_class.inv.to_a.map(&:id)).to eq([])
+    end
+
+    it 'removes every placement across containers' do
+      described_class.new_inv('123', 'gem', 'ruby', 'container1')
+      described_class.new_inv('123', 'gem', 'ruby', 'container2') # stale duplicate elsewhere
+
+      described_class.remove_inv_item('123')
+
+      expect(described_class.containers['container1'].map(&:id)).to eq([])
+      expect(described_class.containers['container2'].map(&:id)).to eq([])
+    end
+
+    it 'is a no-op for an unknown id' do
+      described_class.new_inv('999', 'gem', 'opal', 'container1')
+
+      described_class.remove_inv_item('123')
+
+      expect(described_class.containers['container1'].map(&:id)).to eq(['999'])
+    end
+
+    it 'is a no-op for nil' do
+      described_class.new_inv('999', 'gem', 'opal', 'container1')
+
+      expect { described_class.remove_inv_item(nil) }.not_to raise_error
+      expect(described_class.containers['container1'].map(&:id)).to eq(['999'])
+    end
+
+    # Adversarial: empty hands fire remove_inv_item(nil) constantly. The nil
+    # guard must not let that match and wipe a nil-id entry (obj.id == nil).
+    it 'does NOT remove a nil-id entry when called with nil' do
+      described_class.new_inv(nil, 'thing', 'a mysterious idless thing', 'container1')
+
+      described_class.remove_inv_item(nil)
+
+      expect(described_class.containers['container1'].map(&:name)).to eq(['a mysterious idless thing'])
+    end
+
+    it 'is a no-op for an empty-string id' do
+      described_class.new_inv('999', 'gem', 'opal', 'container1')
+
+      described_class.remove_inv_item('')
+
+      expect(described_class.containers['container1'].map(&:id)).to eq(['999'])
+    end
+
+    it 'accepts an integer id' do
+      described_class.new_inv('123', 'gem', 'ruby', 'container1')
+
+      described_class.remove_inv_item(123)
+
+      expect(described_class.containers['container1'].map(&:id)).to eq([])
+    end
+  end
+
   describe '.clear_inv' do
     it 'clears the @@inv array' do
       described_class.new_inv('123', 'gem', 'ruby')

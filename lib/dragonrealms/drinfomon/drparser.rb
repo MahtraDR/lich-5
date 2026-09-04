@@ -37,7 +37,24 @@ module Lich
         Rested_EXP_F2P = %r{^<component id='exp rexp'>\[Unlock Rested Experience}.freeze
         TDPValue_XPWindow = %r{^<component id='exp tdp'>\s*TDPs:\s*(?<tdp>\d+)</component>}.freeze
         FavorValue_XPWindow = %r{^<component id='exp favor'>\s*Favors:\s*(?<favor>\d+)</component>}.freeze
-        InventoryGetStart = %r{You rummage about your person, looking for}.freeze
+        # Headers that open a DR inventory scrape whose <d> output we mine for
+        # item IDs. The two differ in completeness, which decides how we write
+        # GameObj (see .parse):
+        #   INV LIST -> COMPLETE: lists everything, so we clear and repopulate.
+        #     "You take a moment and rummage about your person, taking stock of
+        #      your possessions..."
+        #   INV SEARCH <word> / INV <category> full -> PARTIAL: lists only the
+        #     matching items, so we upsert without clearing. The header's trailing
+        #     phrase is a per-category friendly name (e.g. "looking for gems...",
+        #     "looking for armor and shields...") and is not matched here.
+        #
+        # Both are anchored to the start of the stream line so quoted/chat/book
+        # text containing the phrase mid-line cannot open a (mutating) scrape
+        # (cf. GameShutdown). Logs confirm the exact prefixes: INV LIST is bare at
+        # line start; the "looking for" verbs carry exactly one leading
+        # <roundTime/>, which is allowed optionally.
+        InventoryListStart   = %r{^You take a moment and rummage about your person, taking stock of your possessions}.freeze
+        InventorySearchStart = %r{^(?:<roundTime[^>]*/>)?You rummage about your person, looking for}.freeze
 
         # Scheduled shutdown announcement, e.g. "Announcement: DragonRealms will
         # be shutting down in 15 minutes for routine maintenance." Anchored to
@@ -77,6 +94,9 @@ module Lich
       # Class variables for parsing state (must be @@ not @ for module-level state)
       @@parsing_exp_mods_output = false
       @@parsing_inventory_get = false
+      # true while the active inventory scrape is PARTIAL (INV SEARCH / category)
+      # -> items are upserted; false for a COMPLETE INV LIST -> items replace.
+      @@inventory_partial = false
 
       # Wall-clock time the game is expected to go down for maintenance, set
       # from a shutdown announcement. nil when no shutdown is pending.
@@ -174,12 +194,16 @@ module Lich
         when Pattern::OutputClassEmpty
           if @@parsing_inventory_get
             @@parsing_inventory_get = false
+            @@inventory_partial = false
           end
         else
           # This block parses a single line from the output of the `inv search <string>` verb,
           # which lists items on your character. Each line is an XML-like string.
           # Example: <d cmd='get #12345'>a small pouch</d>
-          if @@parsing_inventory_get && (stripped = server_string.strip).start_with?('<d cmd=')
+          # INV LIST nests a container's contents beneath it and prefixes each
+          # nested line with a dash (e.g. "   -<d cmd='get #1 in #2'>..."), while
+          # INV SEARCH output is flat. Strip a leading dash so both forms parse.
+          if @@parsing_inventory_get && (stripped = server_string.strip.sub(/\A-\s*/, '')).start_with?('<d cmd=')
             # Pull the cmd attribute and item name out of the line's leading <d> element
             # with a SAX handler. The element is captured as it streams in, before any
             # trailing prose (e.g. "... is in your right hand.") -- which is not valid XML
@@ -192,13 +216,20 @@ module Lich
 
             return server_string unless handler.cmd
 
-            # Normalize the item name by removing leading articles ('a', 'an', 'some').
-            item_name = Lich::Common::XmlEntities.decode(handler.name.to_s).sub(/^(?:a|an|some)\s/, '').strip
+            # Normalize the item name by removing a leading article ('a', 'an',
+            # 'some'), case-insensitively: some inventory verbs lowercase the
+            # article ("a dirty inkpot") while others capitalize it ("A soft gem
+            # pouch"), and the same item must normalize identically either way.
+            item_name = Lich::Common::XmlEntities.decode(handler.name.to_s).sub(/^(?:a|an|some)\s/i, '').strip
 
             # Extract the command and the unique item ID from the 'cmd' attribute.
             cmd = handler.cmd.to_s.downcase.strip
-            id_match = /get (?<itemID>#\d+)(?: in (?<container1>#\d+|[^']+))?(?: in (?<container2>#\d+|[^']+))?/.match(cmd)
-            # <!-- Regex to capture item and container IDs: cmd='get (?<itemID>#\d+)(?: in (?<container1>#\d+|[^']+))?(?: in (?<container2>#\d+|[^']+))?' -->
+            # INV SEARCH links every item with a GET command. INV LIST links
+            # worn (top-level) items with a REMOVE command and their contents
+            # with GET, so accept either verb: worn items (no container) go back
+            # into GameObj.inv, nested items into their container's contents.
+            id_match = /(?:get|remove) (?<itemID>#\d+)(?: in (?<container1>#\d+|[^']+))?(?: in (?<container2>#\d+|[^']+))?/.match(cmd)
+            # <!-- Regex to capture item and container IDs: cmd='(?:get|remove) (?<itemID>#\d+)(?: in (?<container1>#\d+|[^']+))?(?: in (?<container2>#\d+|[^']+))?' -->
             # <d cmd='get #8286821 in #8286816 in #8286762'>A papyrus parchment</d> is in a black winter cloak crafted from thick cashmere, which is in a scuffed traveler's pack.
             # <d cmd='get #8735861 in #8735860 in watery portal'>Some arzumodine cloth</d> is in a lumpy canvas sack, which is in an effervescent eddy of honey-hued light captured by a sungold frame.
             # <d cmd='get #8761784'>A seagull feather quill with dyed snowy white barbs</d> is lying at your feet.
@@ -217,16 +248,37 @@ module Lich
               # Store the parsed item information.
               # DRItems.update_item(item, id, cmd, full_description)
               Lich.log("DRParser: Adding inventory item - ID: #{id}, Noun: #{noun}, Name: #{name}, Container: #{container}, Before: #{before}, After: #{after}")
-              GameObj.new_inv(id, noun, name, container, before, after)
-              if container2
+              store_inv_item(id, noun, name, container, before, after)
+              # A doubly-nested line also reveals that container1 sits inside
+              # container2. Only record that during a COMPLETE scrape. In a
+              # PARTIAL (upsert) scrape it would route container1 through
+              # upsert_inv with name=nil, which first removes container1 from
+              # everywhere -- blanking its real name and yanking a worn parent
+              # out of GameObj.inv. That is destructive for a filtered search, so
+              # skip it; the next full INV LIST re-establishes the nesting.
+              if container2 && !@@inventory_partial
                 before = cmd.sub(/get \#\d+ in/, "get")
                 name = nil # We don't know the name of the item in container2
-                GameObj.new_inv(container1, noun, name, container2, before, after)
+                store_inv_item(container1, noun, name, container2, before, after)
               end
             end
           end
         end
         server_string
+      end
+
+      # Routes a parsed inventory item into GameObj according to the active
+      # scrape's completeness: a COMPLETE INV LIST replaces (items were cleared
+      # up front, so a plain add rebuilds the model), while a PARTIAL INV SEARCH /
+      # category scrape upserts by id so it refreshes only the matched items and
+      # never wipes unrelated inventory.
+      # @return [void]
+      def self.store_inv_item(id, noun, name, container, before, after)
+        if @@inventory_partial
+          GameObj.upsert_inv(id, noun, name, container, before, after)
+        else
+          GameObj.new_inv(id, noun, name, container, before, after)
+        end
       end
 
       # Parses 'exp mods' output and updates DRSkill.exp_modifiers.
@@ -468,10 +520,18 @@ module Lich
         check_events(line)
         begin
           check_game_shutdown(line)
-          if Pattern::InventoryGetStart.match?(line)
+          if Pattern::InventoryListStart.match?(line)
+            # COMPLETE inventory (INV LIST): wipe and repopulate from scratch.
             GameObj.clear_inv
             GameObj.clear_all_containers
             @@parsing_inventory_get = true
+            @@inventory_partial = false
+          elsif Pattern::InventorySearchStart.match?(line)
+            # PARTIAL inventory (INV SEARCH <word> / INV <category> full): only
+            # matching items are listed, so upsert them and leave the rest of the
+            # GameObj model intact -- no clear.
+            @@parsing_inventory_get = true
+            @@inventory_partial = true
           elsif (match = line.match(Pattern::GenderAgeCircle))
             DRStats.gender = match[:gender]
             DRStats.age = match[:age].to_i
@@ -597,6 +657,15 @@ module Lich
             DRStats.tdps = match[:tdp].to_i
           elsif (match = line.match(Pattern::FavorValue_XPWindow))
             DRStats.favors = match[:favor].to_i
+          end
+
+          # Safety valve: a scrape that never saw its closing <output class=""/>
+          # (interrupted or truncated stream) must not stay open and hijack later
+          # <d cmd> links in ordinary output. Any <prompt> ends the exchange, so
+          # reset there. In normal flow the flag is already false by the prompt.
+          if @@parsing_inventory_get && line.start_with?('<prompt')
+            @@parsing_inventory_get = false
+            @@inventory_partial = false
           end
 
           populate_inventory_get(line) if @@parsing_inventory_get

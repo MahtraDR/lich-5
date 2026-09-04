@@ -667,45 +667,111 @@ RSpec.describe Lich::DragonRealms::DRParser do
     end
   end
 
-  describe 'inventory search parsing' do
+  describe 'inventory scrape parsing' do
     before(:each) do
       allow(GameObj).to receive(:clear_inv)
       allow(GameObj).to receive(:clear_all_containers)
+      described_class.class_variable_set(:@@parsing_inventory_get, false)
+      described_class.class_variable_set(:@@inventory_partial, false)
     end
 
-    describe 'when InventoryGetStart pattern matches' do
-      let(:inv_search_line) { 'You rummage about your person, looking for' }
-
-      it 'calls GameObj.clear_inv' do
-        expect(GameObj).to receive(:clear_inv)
-
-        described_class.parse(inv_search_line)
+    describe 'headers' do
+      it 'InventoryListStart matches the INV LIST header only' do
+        expect('You take a moment and rummage about your person, taking stock of your possessions...')
+          .to match(described_class::Pattern::InventoryListStart)
+        expect('You rummage about your person, looking for pouch...')
+          .not_to match(described_class::Pattern::InventoryListStart)
       end
 
-      it 'calls GameObj.clear_all_containers' do
+      it 'InventorySearchStart matches the INV SEARCH / category header' do
+        expect('You rummage about your person, looking for pouch...')
+          .to match(described_class::Pattern::InventorySearchStart)
+        expect('You rummage about your person, looking for armor and shields...')
+          .to match(described_class::Pattern::InventorySearchStart)
+      end
+
+      it 'InventorySearchStart matches the real <roundTime/>-prefixed header' do
+        expect("<roundTime value='1788496743'/>You rummage about your person, looking for pouch...")
+          .to match(described_class::Pattern::InventorySearchStart)
+      end
+
+      # Adversarial: a header quoted mid-line (speech/thought/book) must NOT open
+      # a scrape -- for the SEARCH header this would open a *mutating* upsert.
+      # This is why both patterns are anchored to the stream-line start.
+      it 'neither header matches the phrase quoted mid-line in speech' do
+        line = %(Someone says, "You rummage about your person, looking for trouble.")
+        expect(line).not_to match(described_class::Pattern::InventorySearchStart)
+        expect(line).not_to match(described_class::Pattern::InventoryListStart)
+      end
+
+      it 'neither header matches the phrase embedded after prose' do
+        line = 'She watched as you take a moment and rummage about your person, taking stock of your possessions.'
+        expect(line).not_to match(described_class::Pattern::InventoryListStart)
+      end
+
+      it 'does NOT match an arbitrary non-roundTime tag glued before the search header' do
+        expect("<pushStream id='thought'/>You rummage about your person, looking for pouch...")
+          .not_to match(described_class::Pattern::InventorySearchStart)
+      end
+    end
+
+    describe 'when the INV LIST (complete) header matches' do
+      let(:inv_list_line) { 'You take a moment and rummage about your person, taking stock of your possessions...' }
+
+      it 'clears inv and containers, enters parsing, and is NOT partial' do
+        expect(GameObj).to receive(:clear_inv)
         expect(GameObj).to receive(:clear_all_containers)
 
-        described_class.parse(inv_search_line)
-      end
-
-      it 'sets @@parsing_inventory_get to true' do
-        described_class.parse(inv_search_line)
+        described_class.parse(inv_list_line)
 
         # NOTE: class_variable_get is acceptable here - we're verifying the parser
-        # correctly transitions to inventory parsing state after matching the trigger line.
+        # correctly transitions to inventory parsing state after the trigger line.
         expect(described_class.class_variable_get(:@@parsing_inventory_get)).to be true
+        expect(described_class.class_variable_get(:@@inventory_partial)).to be false
       end
     end
 
-    describe 'InventoryGetStart pattern' do
-      it 'matches inv search command output' do
-        line = 'You rummage about your person, looking for'
-        expect(line).to match(described_class::Pattern::InventoryGetStart)
+    describe 'when the INV SEARCH (partial) header matches' do
+      let(:inv_search_line) { 'You rummage about your person, looking for pouch...' }
+
+      it 'enters parsing in partial mode WITHOUT clearing the model' do
+        expect(GameObj).not_to receive(:clear_inv)
+        expect(GameObj).not_to receive(:clear_all_containers)
+
+        described_class.parse(inv_search_line)
+
+        expect(described_class.class_variable_get(:@@parsing_inventory_get)).to be true
+        expect(described_class.class_variable_get(:@@inventory_partial)).to be true
+      end
+    end
+
+    describe 'scrape safety valve (interrupted stream)' do
+      it 'resets an unclosed scrape on the next <prompt> so later <d cmd> links are not hijacked' do
+        described_class.parse('You take a moment and rummage about your person, taking stock of your possessions...')
+        expect(described_class.class_variable_get(:@@parsing_inventory_get)).to be true
+
+        # Stream is interrupted -- no <output class=""/> arrives, just a prompt.
+        described_class.parse('<prompt time="123">&gt;</prompt>')
+
+        expect(described_class.class_variable_get(:@@parsing_inventory_get)).to be false
+
+        # A later stray get-link in ordinary output must NOT be parsed as inventory.
+        expect(GameObj).not_to receive(:new_inv)
+        described_class.parse("<d cmd='get #999'>a random link</d>")
       end
 
-      it 'matches partial inv search output' do
-        line = 'You rummage about your person, looking for all items'
-        expect(line).to match(described_class::Pattern::InventoryGetStart)
+      it 'also clears PARTIAL mode when a prompt ends an interrupted search scrape' do
+        described_class.parse("<roundTime value='1'/>You rummage about your person, looking for pouch...")
+        expect(described_class.class_variable_get(:@@inventory_partial)).to be true
+
+        described_class.parse('<prompt time="123">&gt;</prompt>')
+
+        expect(described_class.class_variable_get(:@@parsing_inventory_get)).to be false
+        expect(described_class.class_variable_get(:@@inventory_partial)).to be false
+
+        # A stray get-link afterward must NOT be upserted into the live model.
+        expect(GameObj).not_to receive(:upsert_inv)
+        described_class.parse("<d cmd='get #999'>a random link</d>")
       end
     end
   end
@@ -865,12 +931,20 @@ RSpec.describe Lich::DragonRealms::DRParser do
   describe '.populate_inventory_get' do
     before(:each) do
       allow(GameObj).to receive(:new_inv)
+      allow(GameObj).to receive(:upsert_inv)
       described_class.class_variable_set(:@@parsing_inventory_get, true)
+      # Default to COMPLETE (INV LIST) mode for the existing add cases.
+      described_class.class_variable_set(:@@inventory_partial, false)
     end
 
     it 'parses a top-level item, stripping a leading article' do
       expect(GameObj).to receive(:new_inv).with('12345', nil, 'small pouch', nil, 'get #12345', nil)
       described_class.populate_inventory_get("<d cmd='get #12345'>a small pouch</d>")
+    end
+
+    it 'strips a capitalized leading article (e.g. from INV SEARCH output)' do
+      expect(GameObj).to receive(:new_inv).with('12345', nil, 'soft gem pouch', nil, 'get #12345', nil)
+      described_class.populate_inventory_get("<d cmd='get #12345'>A soft gem pouch</d>")
     end
 
     it 'parses a nested item with its container' do
@@ -883,9 +957,55 @@ RSpec.describe Lich::DragonRealms::DRParser do
       described_class.populate_inventory_get("<d cmd='get #8761784'>a seagull feather quill</d> is in your right hand.")
     end
 
-    it 'stops parsing on the output-class-empty tag' do
+    it 'parses an inv list worn item linked with a remove command into inv' do
+      expect(GameObj).to receive(:new_inv).with('10859433', nil, 'hooded electroweave cloak', nil, 'remove #10859433', nil)
+      described_class.populate_inventory_get("  <d cmd='remove #10859433'>a hooded electroweave cloak</d>")
+    end
+
+    it 'parses an inv list nested item despite the leading dash and indentation' do
+      expect(GameObj).to receive(:new_inv).with('10859466', nil, 'dirty inkpot', '10859433', 'get #10859466 in #10859433', nil)
+      described_class.populate_inventory_get("     -<d cmd='get #10859466 in #10859433'>a dirty inkpot</d>")
+    end
+
+    it 'parses a doubly-nested inv list item and registers the middle container' do
+      expect(GameObj).to receive(:new_inv).with('10956111', nil, 'rosemary-dusted pumpkin and apple tart drizzled with an amber glaze', '10956107', 'get #10956111 in #10956107 in a watery portal', nil)
+      expect(GameObj).to receive(:new_inv).with('10956107', nil, nil, 'a watery portal', 'get #10956107 in a watery portal', nil)
+      described_class.populate_inventory_get("        -<d cmd='get #10956111 in #10956107 in a watery portal'>a rosemary-dusted pumpkin and apple tart drizzled with an amber glaze</d>")
+    end
+
+    it 'stops parsing and clears partial mode on the output-class-empty tag' do
+      described_class.class_variable_set(:@@inventory_partial, true)
       described_class.populate_inventory_get('<output class=""/>')
       expect(described_class.class_variable_get(:@@parsing_inventory_get)).to be false
+      expect(described_class.class_variable_get(:@@inventory_partial)).to be false
+    end
+
+    context 'in PARTIAL (INV SEARCH / category) mode' do
+      before(:each) { described_class.class_variable_set(:@@inventory_partial, true) }
+
+      it 'upserts a matched item instead of a plain add' do
+        expect(GameObj).to receive(:upsert_inv).with('11404650', nil, 'soft gem pouch', '11404639', 'get #11404650 in #11404639', nil)
+        expect(GameObj).not_to receive(:new_inv)
+        described_class.populate_inventory_get("  <d cmd='get #11404650 in #11404639'>A soft gem pouch</d> is in a sky blue thigh quiver.")
+      end
+
+      it 'upserts a matched worn item (remove link) into inv' do
+        expect(GameObj).to receive(:upsert_inv).with('11404268', nil, 'red pouch embroidered with a pork chop', nil, 'remove #11404268', nil)
+        described_class.populate_inventory_get("  <d cmd='remove #11404268'>A red pouch embroidered with a pork chop</d> is being worn.")
+      end
+
+      # Adversarial (#5): a filtered scrape of a deeply-nested item must NOT touch
+      # the intermediate container. Routing it through upsert_inv with name=nil
+      # would blank that container's real name and pull a worn parent out of
+      # GameObj.inv. So the middle container is left alone in partial mode.
+      it 'does NOT upsert the intermediate container for a doubly-nested match' do
+        # Only the matched item itself is upserted...
+        expect(GameObj).to receive(:upsert_inv).with('10956111', nil, 'rosemary-dusted pumpkin and apple tart drizzled with an amber glaze', '10956107', 'get #10956111 in #10956107 in a watery portal', nil)
+        # ...never the middle container (#10956107) with a nil name.
+        expect(GameObj).not_to receive(:upsert_inv).with('10956107', anything, anything, anything, anything, anything)
+        expect(GameObj).not_to receive(:new_inv)
+        described_class.populate_inventory_get("        -<d cmd='get #10956111 in #10956107 in a watery portal'>a rosemary-dusted pumpkin and apple tart drizzled with an amber glaze</d>")
+      end
     end
   end
 end
