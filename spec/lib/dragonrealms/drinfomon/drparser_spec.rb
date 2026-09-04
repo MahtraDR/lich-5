@@ -707,6 +707,62 @@ RSpec.describe Lich::DragonRealms::DRParser do
         line = 'You rummage about your person, looking for all items'
         expect(line).to match(described_class::Pattern::InventoryGetStart)
       end
+
+      it 'matches inv list command output' do
+        line = 'You take a moment and rummage about your person, taking stock of your possessions...'
+        expect(line).to match(described_class::Pattern::InventoryGetStart)
+      end
+
+      it 'matches a search header carrying the real <roundTime/> prefix' do
+        line = "<roundTime value='1788496743'/>You rummage about your person, looking for pouch..."
+        expect(line).to match(described_class::Pattern::InventoryGetStart)
+      end
+
+      # Adversarial: the phrase quoted mid-line (speech/thought/book) must NOT
+      # open a mutating scrape. This is why the pattern is anchored.
+      it 'does NOT match the phrase quoted mid-line in speech' do
+        line = %(Someone says, "You rummage about your person, looking for trouble.")
+        expect(line).not_to match(described_class::Pattern::InventoryGetStart)
+      end
+
+      it 'does NOT match the phrase embedded after other prose' do
+        line = 'She watched as you take a moment and rummage about your person, taking stock of your possessions.'
+        expect(line).not_to match(described_class::Pattern::InventoryGetStart)
+      end
+
+      it 'does NOT match an arbitrary tag glued before the header' do
+        line = "<pushStream id='thought'/>You rummage about your person, looking for pouch..."
+        expect(line).not_to match(described_class::Pattern::InventoryGetStart)
+      end
+    end
+
+    describe 'when the inv list header matches' do
+      let(:inv_list_line) { 'You take a moment and rummage about your person, taking stock of your possessions...' }
+
+      it 'clears inv and containers and enters parsing state' do
+        expect(GameObj).to receive(:clear_inv)
+        expect(GameObj).to receive(:clear_all_containers)
+
+        described_class.parse(inv_list_line)
+
+        expect(described_class.class_variable_get(:@@parsing_inventory_get)).to be true
+      end
+    end
+
+    describe 'scrape safety valve (interrupted stream)' do
+      it 'resets an unclosed scrape on the next <prompt> so later <d cmd> links are not hijacked' do
+        described_class.parse('You take a moment and rummage about your person, taking stock of your possessions...')
+        expect(described_class.class_variable_get(:@@parsing_inventory_get)).to be true
+
+        # Stream is interrupted -- no <output class=""/> arrives, just a prompt.
+        described_class.parse('<prompt time="123">&gt;</prompt>')
+
+        expect(described_class.class_variable_get(:@@parsing_inventory_get)).to be false
+
+        # A later stray get-link in ordinary output must NOT be parsed as inventory.
+        expect(GameObj).not_to receive(:new_inv)
+        described_class.parse("<d cmd='get #999'>a random link</d>")
+      end
     end
   end
 
@@ -886,6 +942,22 @@ RSpec.describe Lich::DragonRealms::DRParser do
     it 'parses an item line with trailing location prose' do
       expect(GameObj).to receive(:new_inv).with('8761784', nil, 'seagull feather quill', nil, 'get #8761784', nil)
       described_class.populate_inventory_get("<d cmd='get #8761784'>a seagull feather quill</d> is in your right hand.")
+    end
+
+    it 'parses an inv list worn item linked with a remove command into inv' do
+      expect(GameObj).to receive(:new_inv).with('10859433', nil, 'hooded electroweave cloak', nil, 'remove #10859433', nil)
+      described_class.populate_inventory_get("  <d cmd='remove #10859433'>a hooded electroweave cloak</d>")
+    end
+
+    it 'parses an inv list nested item despite the leading dash and indentation' do
+      expect(GameObj).to receive(:new_inv).with('10859466', nil, 'dirty inkpot', '10859433', 'get #10859466 in #10859433', nil)
+      described_class.populate_inventory_get("     -<d cmd='get #10859466 in #10859433'>a dirty inkpot</d>")
+    end
+
+    it 'parses a doubly-nested inv list item and registers the middle container' do
+      expect(GameObj).to receive(:new_inv).with('10956111', nil, 'rosemary-dusted pumpkin and apple tart drizzled with an amber glaze', '10956107', 'get #10956111 in #10956107 in a watery portal', nil)
+      expect(GameObj).to receive(:new_inv).with('10956107', nil, nil, 'a watery portal', 'get #10956107 in a watery portal', nil)
+      described_class.populate_inventory_get("        -<d cmd='get #10956111 in #10956107 in a watery portal'>a rosemary-dusted pumpkin and apple tart drizzled with an amber glaze</d>")
     end
 
     it 'stops parsing on the output-class-empty tag' do
