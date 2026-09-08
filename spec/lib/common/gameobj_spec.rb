@@ -134,6 +134,24 @@ RSpec.describe Lich::Common::GameObj do
       # Original should not be affected
       expect(described_class.containers['container1']).not_to be_empty
     end
+
+    it 'returns duplicated inner arrays so a reader iterating one is unaffected by in-place mutation' do
+      described_class.new_inv('10', 'gem', 'ruby', 'container1')
+      described_class.new_inv('11', 'gem', 'opal', 'container1')
+      described_class.new_inv('12', 'gem', 'jade', 'container1')
+
+      snapshot = described_class.containers['container1']
+      visited = []
+      snapshot.each do |item|
+        visited << item.id
+        # Simulate a hand pickup reconciling the live model mid-iteration: this
+        # reject!s the live inner array. A shared inner array would shift the
+        # iterator and silently skip '11'.
+        described_class.remove_inv_item('11') if item.id == '10'
+      end
+
+      expect(visited).to eq(%w[10 11 12])
+    end
   end
 
   describe '.upsert_inv' do
@@ -169,6 +187,32 @@ RSpec.describe Lich::Common::GameObj do
       expect(list.first.name).to eq('soft gem pouch (closed)')
     end
 
+    it 'evicts the orphaned index entry for the old name immediately (no wait for TTL prune)' do
+      index = described_class.class_variable_get(:@@index)
+      described_class.new_inv('123', nil, 'soft gem pouch', 'container1')
+      expect(index).to have_key('123||soft gem pouch') # noun is nil -> empty segment
+
+      described_class.upsert_inv('123', nil, 'soft gem pouch (closed)', 'container1')
+
+      # The renamed entry is live; the old-name entry is a dead orphan and must be
+      # gone right away rather than lingering until the next prune sweep.
+      expect(index).to have_key('123||soft gem pouch (closed)')
+      expect(index).not_to have_key('123||soft gem pouch')
+    end
+
+    it 'keeps a same-id variant that is still live in another registry' do
+      index = described_class.class_variable_get(:@@index)
+      described_class.new_right_hand('123', 'pouch', 'a soft gem pouch') # live in a hand
+      described_class.new_inv('123', 'pouch', 'a soft gem pouch', 'container1')
+
+      described_class.upsert_inv('123', 'pouch', 'a soft gem pouch (closed)', 'container1')
+
+      # The hand variant shares the id but is a distinct, still-held instance;
+      # eviction is by object identity, so it must survive.
+      expect(index).to have_key('123|pouch|a soft gem pouch') # held in the hand
+      expect(index).to have_key('123|pouch|a soft gem pouch (closed)')
+    end
+
     it 'relocates a contained item to worn inv when container is nil' do
       described_class.new_inv('123', 'gem', 'ruby', 'container1')
 
@@ -182,6 +226,76 @@ RSpec.describe Lich::Common::GameObj do
       obj = described_class.upsert_inv(12345, 'gem', 'ruby')
 
       expect(obj.id).to eq('12345')
+    end
+  end
+
+  describe '.remove_inv_item' do
+    it 'removes the id from a container' do
+      described_class.new_inv('123', 'gem', 'ruby', 'container1')
+      described_class.new_inv('999', 'gem', 'opal', 'container1') # bystander stays
+
+      described_class.remove_inv_item('123')
+
+      expect(described_class.containers['container1'].map(&:id)).to eq(['999'])
+    end
+
+    it 'removes the id from worn inv' do
+      described_class.new_inv('123', 'gem', 'ruby')
+
+      described_class.remove_inv_item('123')
+
+      expect(described_class.inv.to_a.map(&:id)).to eq([])
+    end
+
+    it 'removes every placement across containers' do
+      described_class.new_inv('123', 'gem', 'ruby', 'container1')
+      described_class.new_inv('123', 'gem', 'ruby', 'container2') # stale duplicate elsewhere
+
+      described_class.remove_inv_item('123')
+
+      expect(described_class.containers['container1'].map(&:id)).to eq([])
+      expect(described_class.containers['container2'].map(&:id)).to eq([])
+    end
+
+    it 'is a no-op for an unknown id' do
+      described_class.new_inv('999', 'gem', 'opal', 'container1')
+
+      described_class.remove_inv_item('123')
+
+      expect(described_class.containers['container1'].map(&:id)).to eq(['999'])
+    end
+
+    it 'is a no-op for nil' do
+      described_class.new_inv('999', 'gem', 'opal', 'container1')
+
+      expect { described_class.remove_inv_item(nil) }.not_to raise_error
+      expect(described_class.containers['container1'].map(&:id)).to eq(['999'])
+    end
+
+    # Adversarial: empty hands fire remove_inv_item(nil) constantly. The nil
+    # guard must not let that match and wipe a nil-id entry (obj.id == nil).
+    it 'does NOT remove a nil-id entry when called with nil' do
+      described_class.new_inv(nil, 'thing', 'a mysterious idless thing', 'container1')
+
+      described_class.remove_inv_item(nil)
+
+      expect(described_class.containers['container1'].map(&:name)).to eq(['a mysterious idless thing'])
+    end
+
+    it 'is a no-op for an empty-string id' do
+      described_class.new_inv('999', 'gem', 'opal', 'container1')
+
+      described_class.remove_inv_item('')
+
+      expect(described_class.containers['container1'].map(&:id)).to eq(['999'])
+    end
+
+    it 'accepts an integer id' do
+      described_class.new_inv('123', 'gem', 'ruby', 'container1')
+
+      described_class.remove_inv_item(123)
+
+      expect(described_class.containers['container1'].map(&:id)).to eq([])
     end
   end
 
@@ -1192,6 +1306,52 @@ RSpec.describe Lich::Common::GameObj do
         expect { described_class.discard_staged_refreshes }
           .not_to(change { described_class.npcs.map(&:id) })
       end
+    end
+  end
+
+  # A full INV LIST refresh (begin_all_containers) stages into its own dedicated
+  # buffer, so an unrelated per-container refresh (begin_container -- e.g. a
+  # clearContainer fill) that is in flight at the same time must never be
+  # clobbered by the full refresh's whole-buffer discard or commit.
+  describe 'INV LIST full refresh isolation from per-container refreshes' do
+    it 'does not drop an unrelated in-flight container when the listing is discarded' do
+      described_class.begin_all_containers          # INV LIST opens
+      described_class.begin_container('backpack')   # unrelated clearContainer refresh
+      described_class.new_inv('55', 'gem', 'a gem', 'backpack')
+
+      described_class.discard_inv_refresh           # listing interrupted -- must not wipe backpack
+      described_class.commit_all_containers         # next prompt publishes the per-container refresh
+
+      expect(described_class.containers['backpack'].map(&:id)).to eq(['55'])
+    end
+
+    it 'does not publish an unrelated half-filled container when the listing commits' do
+      described_class.begin_all_containers
+      described_class.new_inv('99', 'ring', 'a ring', 'pouch') # a real INV LIST container
+      described_class.begin_container('backpack')              # unrelated, still filling
+      described_class.new_inv('55', 'gem', 'a gem', 'backpack')
+
+      described_class.commit_all_containers_full # clean INV LIST terminator
+
+      # The full commit publishes only its own containers, never the half-filled backpack.
+      expect(described_class.containers).to have_key('pouch')
+      expect(described_class.containers).not_to have_key('backpack')
+
+      described_class.commit_all_containers         # prompt publishes the per-container refresh
+      expect(described_class.containers['backpack'].map(&:id)).to eq(['55'])
+    end
+
+    it 'preserves an already-open per-container refresh when a full refresh starts' do
+      described_class.begin_container('backpack')
+      described_class.new_inv('55', 'gem', 'a gem', 'backpack')
+
+      described_class.begin_all_containers          # INV LIST opens AFTER the per-container refresh
+      described_class.new_inv('99', 'ring', 'a ring', 'pouch')
+      described_class.commit_all_containers_full
+      described_class.commit_all_containers
+
+      expect(described_class.containers['backpack'].map(&:id)).to eq(['55'])
+      expect(described_class.containers['pouch'].map(&:id)).to eq(['99'])
     end
   end
 end
