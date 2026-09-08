@@ -215,7 +215,16 @@ module Lich
       #
       # @return [String, nil]
       def type
-        GameObj.load_data if @@type_data.empty?
+        # +load_data+ nils +@@type_data+ (not +{}+) when the data file is missing
+        # or corrupt, and returns false rather than raising. Only attempt the load
+        # from the pristine +{}+ state (a nil is falsy under +&&+, so a failed load
+        # isn't retried on every call -- it echoes its error once, then degrades),
+        # and guard the lookup so a broken +gameobj-data.xml+ yields +nil+ instead
+        # of crashing every +#type+ caller -- including every Inventory::Item,
+        # which now exposes this as public API.
+        GameObj.load_data if @@type_data && @@type_data.empty?
+        return nil if @@type_data.nil?
+
         cache_key = "#{@noun}|#{@name}|#{full_name}"
         return @@type_cache[cache_key] if @@type_cache.key?(cache_key)
 
@@ -235,7 +244,11 @@ module Lich
       #
       # @return [String, nil]
       def sellable
-        GameObj.load_data if @@sellable_data.empty?
+        # See +#type+: degrade to +nil+ (loudly once, then quietly) when the data
+        # file is missing/corrupt rather than raising on +nil.empty?+/+nil.keys+.
+        GameObj.load_data if @@sellable_data && @@sellable_data.empty?
+        return nil if @@sellable_data.nil?
+
         matches = matching_data_keys(@@sellable_data)
         matches.empty? ? nil : matches.join(',')
       end
@@ -348,6 +361,44 @@ module Lich
         else
           find_or_create(@@staging_inv || @@inv, id, noun, name, before, after)
         end
+      end
+
+      # Upserts an inventory item by id for a PARTIAL (filtered) scrape -- e.g.
+      # +INV SEARCH <word>+ or +INV <category> full+, which list only the
+      # matching items and so must not clear unrelated inventory the way a full
+      # +INV LIST+ refresh does. Any prior placement of +id+ is removed from
+      # +@@inv+ and every +@@contents+ list first, so an item that moved
+      # containers (or whose name changed, e.g. gained "(closed)") is refreshed
+      # in exactly one place with neither a duplicate nor a stale copy left
+      # behind. It is then (re)placed via {.new_inv}: worn (+container+ nil) into
+      # +@@inv+, otherwise into +@@contents[container]+.
+      #
+      # Because a filtered scrape only reports matches, it can add or relocate
+      # items but can never prove an item is gone -- removals are left to the
+      # next full refresh.
+      #
+      # The removal runs under +@@index_mutex+ (the same lock +find_or_create+
+      # holds for registry writes) so it cannot race the off-thread
+      # +prune_index!+ sweep that walks +@@inv+/+@@contents+. It is a separate
+      # acquisition from the +new_inv+ that follows -- Ruby's Mutex is not
+      # reentrant, and +new_inv+ takes the lock itself -- so remove and re-add
+      # are not one atomic step; that is fine because the parser thread is the
+      # sole writer and a reader can at worst momentarily not see the item.
+      #
+      # @param id        [Integer, String]
+      # @param noun      [String, nil]
+      # @param name      [String, nil]
+      # @param container [String, nil]
+      # @param before    [String, nil]
+      # @param after     [String, nil]
+      # @return [GameObj]
+      def self.upsert_inv(id, noun, name, container = nil, before = nil, after = nil)
+        str_id = id.is_a?(Integer) ? id.to_s : id
+        @@index_mutex.synchronize do
+          @@inv.reject! { |obj| obj.id == str_id }
+          @@contents.each_value { |list| list.reject! { |obj| obj.id == str_id } }
+        end
+        new_inv(str_id, noun, name, container, before, after)
       end
 
       # Creates and registers a new reserve slot item.
@@ -600,6 +651,21 @@ module Lich
         @@contents.delete(container_id)
       end
 
+      # Whether a top-level inventory (+@@inv+) staged refresh is currently open.
+      # Lets a second writer (e.g. the {Lich::Common::Inventory} read-model) skip
+      # its own +begin_inv+/+commit_inv+ cycle so it cannot prematurely publish or
+      # truncate an in-flight classic +@@inv+ refresh.
+      #
+      # @return [Boolean]
+      def self.inv_refresh_open? = !@@staging_inv.nil?
+
+      # Whether a staged refresh for one container's contents is currently open.
+      # Same purpose as {.inv_refresh_open?}, scoped to a single container id.
+      #
+      # @param container_id [String]
+      # @return [Boolean]
+      def self.container_refresh_open?(container_id) = @@staging_contents.key?(container_id)
+
       # ---------------------------------------------------------------------------
       # Staged registry refresh - begin/commit pairs
       #
@@ -629,6 +695,15 @@ module Lich
         @@inv         = @@staging_inv
         @@staging_inv = nil
       end
+
+      # Discards an open +@@inv+ staging buffer WITHOUT publishing it, leaving the
+      # previously published +@@inv+ visible. Rolls back a +begin_inv+ whose fill
+      # failed partway (e.g. a second writer's mirror raised mid-registration) so a
+      # later cycle does not see {.inv_refresh_open?} stuck open. No-op when none is
+      # open. Symmetric with {.commit_inv}.
+      #
+      # @return [void]
+      def self.abort_inv = @@staging_inv = nil
 
       # @return [Array]
       def self.begin_reserve = @@staging_reserve = []
@@ -729,6 +804,15 @@ module Lich
 
         @@contents[container_id] = staged
       end
+
+      # Discards one container's open staging buffer WITHOUT publishing it, leaving
+      # the previously published +@@contents[id]+ visible. Rolls back a
+      # +begin_container+ whose fill failed partway; no-op when none is open. Unlike
+      # {.delete_container} it does NOT remove the published contents.
+      #
+      # @param container_id [String]
+      # @return [void]
+      def self.abort_container(container_id) = @@staging_contents.delete(container_id)
 
       # Publishes every open container staging buffer. Called at the +prompt+
       # that terminates a command burst, the reliable close signal for the
@@ -831,8 +915,8 @@ module Lich
           npc = @@npcs.find { |n| n.id == id }
           next unless npc
           next if npc.status.to_s =~ /dead|gone/i
-          next if npc.name  =~ /^animated\b/i && npc.name !~ /^animated slush/i
-          next if npc.noun  =~ /^(?:arm|appendage|claw|limb|pincer|tentacle)s?$|^(?:palpus|palpi)$/i &&
+          next if npc.name =~ /^animated\b/i && npc.name !~ /^animated slush/i
+          next if npc.noun =~ /^(?:arm|appendage|claw|limb|pincer|tentacle)s?$|^(?:palpus|palpi)$/i &&
                   npc.name !~ /(?:amaranthine|ghostly|grizzled|ancient) kraken tentacle/i
           npc
         end
