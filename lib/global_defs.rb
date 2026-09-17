@@ -281,12 +281,12 @@ end
 
 def waitrt
   wait_until { (XMLData.roundtime_end.to_f - Time.now.to_f + XMLData.server_time_offset.to_f) > 0 }
-  sleep checkrt
+  Script.execution_sleep checkrt
 end
 
 def waitcastrt
   wait_until { (XMLData.cast_roundtime_end.to_f - Time.now.to_f + XMLData.server_time_offset.to_f) > 0 }
-  sleep checkcastrt
+  Script.execution_sleep checkcastrt
 end
 
 def checkrt
@@ -311,7 +311,7 @@ end
 #   legacy (no options): whether roundtime remains after the sleep
 def waitrt?(interrupt: nil, cap: nil)
   if interrupt.nil? && cap.nil?
-    sleep checkrt
+    Script.execution_sleep checkrt
     return checkrt > 0.0
   end
 
@@ -321,7 +321,7 @@ def waitrt?(interrupt: nil, cap: nil)
     return had_rt if interrupt && interrupt.call
     return had_rt if stop_at && Time.now >= stop_at
 
-    sleep([checkrt, 0.1].min)
+    Script.execution_sleep([checkrt, 0.1].min)
   end
   had_rt
 end
@@ -336,7 +336,7 @@ def waitcastrt?(interrupt: nil, cap: nil)
   if interrupt.nil? && cap.nil?
     current_castrt = checkcastrt
     if current_castrt.to_f > 0.0
-      sleep(current_castrt)
+      Script.execution_sleep(current_castrt)
       return true
     else
       return false
@@ -349,7 +349,7 @@ def waitcastrt?(interrupt: nil, cap: nil)
     return had_rt if interrupt && interrupt.call
     return had_rt if stop_at && Time.now >= stop_at
 
-    sleep([checkcastrt.to_f, 0.1].min)
+    Script.execution_sleep([checkcastrt.to_f, 0.1].min)
   end
   had_rt
 end
@@ -663,6 +663,7 @@ def wait_until(announce = nil)
     end
     sleep 0.25
   end
+ensure
   Thread.current.priority = priosave
 end
 
@@ -693,6 +694,7 @@ def wait_while(announce = nil)
     end
     sleep 0.25
   end
+ensure
   Thread.current.priority = priosave
 end
 
@@ -1270,13 +1272,13 @@ end
 
 def pause(num = 1)
   if num.to_s =~ /m/
-    sleep((num.sub(/m/, '').to_f * 60))
+    Script.execution_sleep((num.sub(/m/, '').to_f * 60))
   elsif num.to_s =~ /h/
-    sleep((num.sub(/h/, '').to_f * 3600))
+    Script.execution_sleep((num.sub(/h/, '').to_f * 3600))
   elsif num.to_s =~ /d/
-    sleep((num.sub(/d/, '').to_f * 86400))
+    Script.execution_sleep((num.sub(/d/, '').to_f * 86400))
   else
-    sleep(num.to_f)
+    Script.execution_sleep(num.to_f)
   end
 end
 
@@ -1510,14 +1512,14 @@ def fput(message, *waitingfor)
   # second; without one, the plain sleep of before. True when interrupted.
   wait = lambda do |seconds|
     if interrupt.nil?
-      sleep(seconds)
+      Script.execution_sleep(seconds)
       return false
     end
     slices = (seconds / 0.1).ceil
     slices.times do
       return true if interrupted.call
 
-      sleep(0.1)
+      Script.execution_sleep(0.1)
     end
     false
   end
@@ -1576,27 +1578,27 @@ def fput(message, *waitingfor)
     elsif string =~ /stunned|can't do that while|cannot seem|^(?!You rummage).*can't seem|don't seem|Sorry, you may only type ahead/
       if dead?
         echo "You're dead...! You can't do that!"
-        sleep 1
+        Script.execution_sleep 1
         script.downstream_buffer.unshift(string)
         return fail_with.call(:dead)
       elsif checkstunned
         while checkstunned
           return fail_with.call(:interrupted) if interrupted.call
 
-          sleep("0.25".to_f)
+          Script.execution_sleep("0.25".to_f)
         end
       elsif checkwebbed
         while checkwebbed
           return fail_with.call(:interrupted) if interrupted.call
 
-          sleep("0.25".to_f)
+          Script.execution_sleep("0.25".to_f)
         end
       elsif string =~ /Sorry, you may only type ahead/
         return fail_with.call(:interrupted) if wait.call(1)
       elsif resend_transient
         return fail_with.call(:interrupted) if wait.call(0.25)
       else
-        sleep 0.1
+        Script.execution_sleep 0.1
         script.downstream_buffer.unshift(string)
         return fail_with.call(:refused)
       end
@@ -1895,13 +1897,13 @@ def dothis(action, success_line)
         return line
       elsif line =~ /^(\.\.\.w|W)ait ([0-9]+) sec(onds)?\.$/
         if $2.to_i > 1
-          sleep($2.to_i - "0.5".to_f)
+          Script.execution_sleep($2.to_i - "0.5".to_f)
         else
-          sleep 0.3
+          Script.execution_sleep 0.3
         end
         break
       elsif line == 'Sorry, you may only type ahead 1 command.'
-        sleep 1
+        Script.execution_sleep 1
         break
       elsif line == 'You are still stunned.'
         wait_while { stunned? }
@@ -1909,7 +1911,7 @@ def dothis(action, success_line)
       elsif line == 'That is impossible to do while unconscious!'
         100.times {
           unless (line = get?)
-            sleep 0.1
+            Script.execution_sleep 0.1
           else
             break if line =~ /Your thoughts slowly come back to you as you find yourself lying on the ground\.  You must have been sleeping\.$|^You wake up from your slumber\.$/
           end
@@ -1918,7 +1920,7 @@ def dothis(action, success_line)
       elsif line == "You don't seem to be able to move to do that."
         100.times {
           unless (line = get?)
-            sleep 0.1
+            Script.execution_sleep 0.1
           else
             break if line == 'The restricting force that envelops you dissolves away.'
           end
@@ -1930,7 +1932,7 @@ def dothis(action, success_line)
       elsif line == 'You find that impossible under the effects of the lullabye.'
         100.times {
           unless (line = get?)
-            sleep 0.1
+            Script.execution_sleep 0.1
           else
             # fixme
             break if line == 'You shake off the effects of the lullabye.'
@@ -1955,19 +1957,19 @@ def dothistimeout(action, timeout, success_line, interrupt: nil)
 
       line = get?
       if line.nil?
-        sleep 0.1
+        Script.execution_sleep 0.1
       elsif line =~ success_line
         return line
       elsif line =~ /^(\.\.\.w|W)ait ([0-9]+) sec(onds)?\.$/
         if $2.to_i > 1
-          sleep($2.to_i - "0.5".to_f)
+          Script.execution_sleep($2.to_i - "0.5".to_f)
         else
-          sleep 0.3
+          Script.execution_sleep 0.3
         end
         end_time = Time.now.to_f + timeout
         break
       elsif line == 'Sorry, you may only type ahead 1 command.'
-        sleep 1
+        Script.execution_sleep 1
         end_time = Time.now.to_f + timeout
         break
       elsif line == 'You are still stunned.'
@@ -1977,7 +1979,7 @@ def dothistimeout(action, timeout, success_line, interrupt: nil)
       elsif line == 'That is impossible to do while unconscious!'
         100.times {
           unless (line = get?)
-            sleep 0.1
+            Script.execution_sleep 0.1
           else
             break if line =~ /Your thoughts slowly come back to you as you find yourself lying on the ground\.  You must have been sleeping\.$|^You wake up from your slumber\.$/
           end
@@ -1986,7 +1988,7 @@ def dothistimeout(action, timeout, success_line, interrupt: nil)
       elsif line == "You don't seem to be able to move to do that."
         100.times {
           unless (line = get?)
-            sleep 0.1
+            Script.execution_sleep 0.1
           else
             break if line == 'The restricting force that envelops you dissolves away.'
           end
@@ -1998,7 +2000,7 @@ def dothistimeout(action, timeout, success_line, interrupt: nil)
       elsif line == 'You find that impossible under the effects of the lullabye.'
         100.times {
           unless (line = get?)
-            sleep 0.1
+            Script.execution_sleep 0.1
           else
             # fixme
             break if line == 'You shake off the effects of the lullabye.'
@@ -2130,41 +2132,32 @@ def detachable_clients_close
 end
 
 # Send one newly attached frontend the game state it missed before attaching.
+#
+# Waiting for the login feed and sending are shared here; what goes into the
+# push is owned by each game (Lich::Gemstone::DetachableClientInit and
+# Lich::DragonRealms::DetachableClientInit, loaded by GameLoader). The unqualified
+# DetachableClientInit resolves to the running game's module, since main.rb
+# includes Lich::Gemstone or Lich::DragonRealms before the listener starts.
 def detachable_client_send_init(client)
-  100.times { sleep 0.1; break if XMLData.indicator['IconJOINED'] }
-  init_str = "<progressBar id='mana' value='0' text='mana #{XMLData.mana}/#{XMLData.max_mana}'/>"
-  init_str.concat "<progressBar id='health' value='0' text='health #{XMLData.health}/#{XMLData.max_health}'/>"
-  init_str.concat "<progressBar id='spirit' value='0' text='spirit #{XMLData.spirit}/#{XMLData.max_spirit}'/>"
-  init_str.concat "<progressBar id='stamina' value='0' text='stamina #{XMLData.stamina}/#{XMLData.max_stamina}'/>"
-  init_str.concat "<spell>#{Lich::Common::XmlEntities.encode(XMLData.prepared_spell)}</spell>"
-  %w[IconBLEEDING IconPOISONED IconDISEASED IconSTANDING IconKNEELING IconSITTING IconPRONE].each do |indicator|
-    init_str.concat "<indicator id='#{indicator}' visible='#{XMLData.indicator[indicator]}'/>"
+  # The wait confirms login and that enough of the initial feed has been parsed
+  # to build the push. What counts as enough depends on the game's feed, so each
+  # game module answers it with ready?. The module itself only exists once
+  # GameLoader has loaded it, so keep waiting until then. Checked before
+  # sleeping so an already logged-in session is not delayed.
+  100.times do
+    break if defined?(DetachableClientInit) && DetachableClientInit.ready?
+
+    sleep 0.1
   end
-  if XMLData.game.to_s.match?(/GS/)
-    init_str.concat "<progressBar id='pbarStance' value='#{XMLData.stance_value}'/>"
-    init_str.concat "<progressBar id='mindState' value='#{XMLData.mind_value}' text='#{Lich::Common::XmlEntities.encode(XMLData.mind_text)}'/>"
-    init_str.concat "<progressBar id='encumlevel' value='#{XMLData.encumbrance_value}' text='#{Lich::Common::XmlEntities.encode(XMLData.encumbrance_text)}'/>"
-    init_str.concat "<right>#{Lich::Common::XmlEntities.encode(GameObj.right_hand.name)}</right>"
-    init_str.concat "<left>#{Lich::Common::XmlEntities.encode(GameObj.left_hand.name)}</left>"
-    %w[back leftHand rightHand head rightArm abdomen leftEye leftArm chest rightLeg neck leftLeg nsys rightEye].each do |area|
-      if Wounds.send(area) > 0
-        init_str.concat "<image id=\"#{area}\" name=\"Injury#{Wounds.send(area)}\"/>"
-      elsif Scars.send(area) > 0
-        init_str.concat "<image id=\"#{area}\" name=\"Scar#{Scars.send(area)}\"/>"
-      end
-    end
+
+  # GameLoader only loads the game modules once the server has identified the
+  # game, so without them there is no feed to describe.
+  unless defined?(DetachableClientInit)
+    Lich.log 'warning: detachable_client_send_init: game modules not loaded, init push skipped'
+    return
   end
-  init_str.concat '<compass>'
-  short_dirs = {
-    'north' => 'n', 'northeast' => 'ne', 'east' => 'e', 'southeast' => 'se',
-    'south' => 's', 'southwest' => 'sw', 'west' => 'w', 'northwest' => 'nw',
-    'up' => 'up', 'down' => 'down', 'out' => 'out'
-  }
-  XMLData.room_exits.each do |direction|
-    init_str.concat "<dir value='#{short_dirs[direction]}'/>" if short_dirs.key?(direction)
-  end
-  init_str.concat '</compass>'
-  client.puts_main_stream(init_str)
+
+  client.puts_main_stream(DetachableClientInit.init_string)
 rescue StandardError => e
   Lich.log "error: detachable_client_send_init: #{e}\n\t#{e.backtrace.first}"
 end
