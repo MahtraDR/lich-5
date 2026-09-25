@@ -108,6 +108,21 @@ genuinely need a tester are quarantined at the bottom. Keep this updated as we g
 
 ## P3 — Known divergences (documented; decide fix vs leave)
 
+- [ ] **R11 cambrinth/`$harn` stall — persistence asymmetry (DIAGNOSED 2026-09-25, fix pending
+      user decision).** `$combattriggersloaded=1` survives a Lich restart (GlobalStore
+      write-through) but `#trigger`s don't (memory-only, `triggers.cfg` never loaded), so
+      sc/ks skip `.loadcombattriggers` and the `{harness}` trigger doesn't exist. Trigger body
+      proven correct headless (`genie-port-lab/reference/harn_trigger_test.rb`). Genie4: both
+      memory-only until `#var save`/`#trigger save`/`#save`; loads both cfgs at startup. Candidate
+      parity work: (a) implement `#var save|load`, `#trigger save|load`, `#save
+      vars|triggers|all`, load `triggers.cfg` at engine start; (b) drop `#var` write-through
+      (behavior change for testers); (c) nothing engine-side, tester runs `,quit` /
+      `,loadcombattriggers`. Tirost (2026-09-25): logs off with `.quit` = NATIVE Genie, no quit
+      alias, connect script is native too -> two-engine state split; our flag is never reset.
+      Recommended: tester-side reset (connect script / `,quit`); (a) is separate low-risk parity
+      work, (b) doesn't fix this. Awaiting aliases.cfg/settings.cfg/variables.cfg. Details:
+      lessons-learned R11.
+
 - [ ] **`substr`/`substring` out-of-range.** Genie throws `ArgumentOutOfRangeException`; ours
       clamps to `""` (fuzz_eval: 26/3000). Can't tell the SCRIPT-level effect of Genie's throw
       from the isolated evaluator (needs Script.cs or a tester) -> left lenient. Decide: match
@@ -171,11 +186,32 @@ genuinely need a tester are quarantined at the bottom. Keep this updated as we g
 
 ## Needs a tester (ONCE) — not self-serviceable
 
-- [ ] **Script-flow replay fixture.** Capture ONE native-Genie session log (game stream in +
-      commands out). Replaying the stream through our engine and diffing emitted commands
-      validates SCRIPT-FLOW parity (matchwait/action/goto/trigger sequencing) — the layer the
-      oracle can't reach (`Script.cs` is Globals/network/WinForms-coupled, not extractable).
-      After capture it's a reusable fixture, not an ongoing dependency.
+- [~] **Script-flow replay fixture — HARNESS BUILT, awaiting ONE capture.** Validates SCRIPT-FLOW
+      parity (matchwait/action/goto/#trigger sequencing) — the layer the oracle can't reach
+      (`Script.cs` is Globals/network/WinForms-coupled, not extractable). Deliverables in
+      `genie-port-lab/reference/`:
+        * `genie_capture.lic` — hand to Tirost. Records IN (server stream w/ XML) + OUT (commands
+          Genie sent) + SNAP (LichGameState reserved-var dump on every `<prompt>`), full epoch
+          timestamps, one record/line. Run under NATIVE Genie driving (Lich as proxy).
+        * `replay_fixture.rb` — Fiber-per-script cooperative SCHEDULER (entry + every `.cmd` it
+          launches + global #triggers, shared GlobalStore, `#script abort` honored). State served
+          from SNAP via `ReplayGameState` (reuses pure `Reserved`); `$unixtime`/time from the
+          captured epoch clock. Diffs our emitted commands vs captured OUT, ORDER-TOLERANT
+          (multiset MISSING/EXTRA = bug candidates; reorderings = soft).
+          Run: `CORPUS=<dir> ruby reference/replay_fixture.rb <capture.log> <entry_script> [args]`.
+        * `replay_selftest.rb` — proves the whole pipeline end-to-end on a synthetic log (ALL PASS);
+          harness validated before the real capture. Real `ks.cmd` fan-out runs to termination, 0 errors.
+      NEXT: coordinate the capture with Tirost (via user), then run `sc`/`ks` and triage any
+      MISSING/EXTRA. After capture it's a reusable fixture, not an ongoing dependency. This is the
+      gate for the `wait`/`move` P2 item below.
+      FIRST CAPTURE (2026-09-22) was taken with the IN-LICH engine driving (OUT = only typed
+      commands) — no native ground truth. Gaps it exposed: (1) `genie_capture.lic` messages say
+      `genie-capture` (launch failed) -> say `genie_capture`; (2) dump user globals +
+      `Lich::Genie.triggers.list` at start/exit (+ per-prompt global diffs if cheap); (3) seed the
+      harness GlobalStore from that dump / `variables.cfg` (else sc diverges at `sc.cmd:5`);
+      (4) in-Lich mode recording the engine's own sends (hook `Game._puts` or parse `[name]>`
+      echoes), filter `,`/`;` typed commands from the diff; (5) `fire_triggers` naive tag strip ->
+      Lich `strip_xml` semantics; (6) report the FIRST divergence prominently.
 - [ ] **Breadth: script GENRES beyond DR combat.** Runtime coverage is DR-combat-heavy
       (Tirost) + crafting (Mastercraft) + public repo compile-clean. Foraging/travel/GS-genre
       runtime behavior is unproven.

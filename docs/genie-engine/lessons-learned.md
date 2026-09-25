@@ -471,6 +471,45 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   "measure each gap first" -- frequency turns a scary-looking item (#queue) into a one-liner and a
   one-line note (action math) into the highest-value fix, and tells you which gap is too risky to
   touch without the tester.
+- **Script-flow replay fixture BUILT (harness ready, awaiting one capture).** The layer the oracle
+  can't reach: `Script.cs` RunScript/TriggerPrompt/TriggerMove is Globals/network/WinForms-coupled,
+  so matchwait/action/goto/#trigger SEQUENCING has no differential test. Built
+  `genie-port-lab/reference/{genie_capture.lic, replay_fixture.rb, replay_selftest.rb}`. Three design
+  decisions that make-or-break the fixture (all confirmed with the user):
+  (1) **Multi-script scheduler, not single-interpreter.** Tirost's combat is NOT one script -- `sc`
+  (5251 lines) / `ks` fan out via `put .res/.remdead/.willw/.ksdi/.pvp` + `put #trigger` installs
+  (commoncombattriggers), so native Genie's captured OUT is the UNION of a whole constellation of
+  concurrent scripts + triggers. A single-interpreter replay with `launch` stubbed (corpus_execute_
+  sweep's model) emits a tiny subset -> the diff is 90% phantom "missing." The harness runs a
+  **Fiber-per-script cooperative scheduler**: each script's `input` port `Fiber.yield`s when its
+  buffer is empty, the scheduler advances the stream one record (pushing lines to EVERY alive
+  script's buffer + firing global #triggers via the headless `Triggers`/`TriggerRunner`), then
+  resumes. Launches spawn new fibers sharing the one `GlobalStore`; `#script abort all except X`
+  actually stops peer fibers (ReplayScriptControl). Real ks.cmd loads + runs its fan-out to
+  termination with 0 errors.
+  (2) **State from captured SNAPSHOTS, not XML reparse.** The engine reads live state ($righthand,
+  $roomid, $SpellTimer.*, DRRoom npcs/pcs/objs, DRSkill ranks, dr_active_spells, Map.genie_id) that
+  is painful and noisy to reconstruct from raw XML -- reimplementing chunks of XMLData/DRRoom = the
+  "diff is noise" trap. Instead the capture (`genie_capture.lic`, run under native-Genie-over-Lich)
+  dumps `LichGameState[name]` for every reserved name on each `<prompt>` -- ground truth from Lich's
+  OWN live state, which the same stream updates. `ReplayGameState` serves the latest SNAP <= cursor
+  and reuses the pure `Reserved` module for the spell/skill/indicator families, so DR-specific logic
+  stays faithful with ZERO reparse. (Divergence between Genie's own $roomid and Lich's is then
+  correctly surfaced as a real command divergence, not masked.)
+  (3) **Two clocks + capture-time epoch for `$unixtime` (2144 uses).** `Specials` defaults its clock
+  to real `Time.now`, DECOUPLED from the interpreter's `clock:` port -- so a naive replay makes
+  $unixtime/@time@ reflect replay wall-clock, breaking every `if $unixtime - %x > N` timing gate.
+  The appendix capture's `HH:MM:SS` (no date) can't fix it either. So: capture full `Time.now.to_f`
+  epochs, inject `Specials.new(clock: -> { Time.at(first_epoch + elapsed) })` (capture-driven), and
+  make the interpreter `clock:` a real-monotonic + captured-elapsed blend (guards fire on real time
+  even when captured time is frozen in a pure row loop; timed waits track the stream).
+  Diff is **order-tolerant** (multiset MISSING/EXTRA = script-flow bug candidates; pure reorderings =
+  soft, since headless has no roundtime/pacing). `replay_selftest.rb` proves the whole pipeline
+  (fan-out + #trigger + matchwait/goto + SNAP var + capture-time unixtime + scriptlist + order-tolerant
+  diff) end-to-end with a hand-authored mini log, so the harness is validated BEFORE the real capture.
+  LESSON: for a replay fixture the state-reconstruction decision dominates -- snapshot the resolver's
+  OUTPUT at capture time (one code path, exact) rather than re-deriving its inputs headless (N code
+  paths, each a new divergence source).
 - **Corpus audits closed two "unless a script needs it" P2 items + found one real dep (v0.10.0).**
   (1) Non-js_arrays JS: the ONLY `.js` include in the whole corpus is `js_arrays.js` (11x) and every
   `js`/`jscall` call is one of the 17 js_arrays functions we already implement -- no other JS lib,
@@ -664,6 +703,42 @@ specs in `interpreter-spec.md` / `expressions-spec.md`.)
   and a failed read keeps the in-memory copy). Regression: two-writer + reader thread hammer in
   `global_store_spec.rb`. **Lesson: any collection reachable from both a script thread and the
   trigger/downstream thread needs a lock — audit the shared `Lich::Genie.*` singletons.**
+- **R11 — sc.cmd charges cambrinth forever; `$harn` never advances (2026-09-22 log, v0.10.5).**
+  Display log: one `prep db 33` then 14x `charge my watersilk bag 34`; the game's "You harness
+  ..." reply arrives raw (no XML) every time. The advancing trigger is
+  `commoncombattriggers.cmd:35` (`{^You tap into the mana|^You harness}` -> `#var harn
+  #evalmath ($harn + 1)` ... `#class harness off`, class `harness`). **Root cause: the trigger
+  was never INSTALLED, not broken.** The log is a fresh Lich process (the one-time `--- Genie
+  engine ... active` banner at line 698), so the in-memory trigger registry started empty; but
+  `$combattriggersloaded` was already `1` from `variables.cfg`, so `sc.cmd:5`/`ks.cmd:63` skipped
+  `.loadcombattriggers` (it never appears in the log). Headless proof:
+  `genie-port-lab/reference/harn_trigger_test.rb` runs Tirost's NEW file through the real
+  Engine+TriggerRunner — body, `\\$` escaping, `#if {..} {..}`, `#evalmath`, class off, and both
+  `$pf` branches all correct; a fresh registry fires nothing.
+  **Genie4 model (read in source):** triggers AND variables are both memory-only between explicit
+  saves. `#trigger` = `oGlobals.AddTrigger` only (Command.cs:1386-1446); `Variables.Add` never
+  saves (Globals.cs:598); disk writes only on `#var save`/`#trigger save`/`#save
+  vars|triggers|all` or the config panels (Command.cs:499-622, 887-914, 1407-1411); FormClosing
+  saves nothing (FormMain.cs:1633); `triggers.cfg`/`variables.cfg` loaded at startup
+  (FormMain.cs:2074). Tirost's suite is written for that: `quit.cmd` = `#trigger clear` ->
+  `#var combattriggersloaded 0` -> `#trigger save` -> `#var save` -> `quit`.
+  **Our divergences that open the hole:** (1) `GlobalStore#set` writes `variables.cfg` on EVERY
+  `#var` (write-through), so the flag hits disk the instant the loader sets it; (2) `#trigger
+  save`/`load` and `#var save`/`load` are silent no-ops and `triggers.cfg` is never loaded;
+  (3) no Genie alias layer on typed input, so a typed `quit` goes straight to the game and
+  quit.cmd's reset never runs; (4) no `#config connectscript` (FormMain.cs:4640) equivalent. Note
+  the stall is ALSO reachable in Genie4 (any `#var save` after the loader, then a restart without
+  quit.cmd), so strict persistence parity alone does not guarantee the fix.
+  **Tirost's answers (2026-09-25) close it:** always logs off with `.quit` (Genie's script char
+  -> runs in NATIVE Genie, not our engine; our scripts launch with `,`), no `quit` alias, and the
+  connect script is also native Genie. So every session-boundary reset runs against native
+  Genie's state and native `variables.cfg`; our `GenieProfiles/Config/variables.cfg` keeps
+  `combattriggersloaded 1` forever. It's a TWO-ENGINE STATE SPLIT, and no persistence-parity change
+  in our engine fixes it (in-Lich scripts also run `#var save`). Fix lives at the session
+  boundary: reset the flag from the (Lich-capable) connect script, or log off with `,quit`.
+  **Lesson: a "loaded" sentinel global that guards in-memory state is only sound if both live in
+  the same persistence domain — when Genie globals persist and triggers don't, check that any
+  `*loaded` flag gets reset on the session boundary.**
 
 ## Ruby / tooling gotchas
 - **AsciiOnlySource rubocop cop** rejects non-ASCII **including in comments** (an em-dash
