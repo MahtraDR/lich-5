@@ -26,6 +26,67 @@ module Lich
 
       @@warned_deprecated_spellfront = 0
 
+      # server_time_offset noise model (see accept_server_time_offset_candidate?,
+      # called from the <prompt> handler in tag_start):
+      #
+      # <prompt time="..."> is whole-second precision, so every sample of
+      # (now - server_time) equals offset_true + latency + frac, where latency
+      # (network/queue delay) and frac (the 0..1s truncation remainder) are
+      # both >= 0 - the raw sample is never smaller than the truth. Because
+      # the error only ever inflates the sample, the minimum sample seen
+      # recently is the best available estimate (the classic NTP min-delay
+      # filter): a bigger latency term can only push a candidate up, so a
+      # queue-delayed prompt (the login burst, a script holding the parser
+      # thread busy - see prompt_ingress_clocks, which already removes most of
+      # this) can lose the minimum but never win it.
+      #
+      # Do NOT key acceptance on how close together two prompts were *parsed*
+      # instead of on the candidate's own value: a backlog drains back-to-back
+      # with a near-zero gap between samples regardless of how delayed each
+      # one was, so a parse-time gap measures queue scheduling, not latency,
+      # and can pin exactly the worst sample - see the "queue-drained batch"
+      # regression spec below for the concrete failure this approach produced
+      # when it was tried.
+      #
+      # `now` still isn't RTT-compensated: `latency` above is one-way
+      # (server-to-client) transmission delay, not round-trip time, and
+      # nothing here sends anything to measure it - that would need
+      # round-trip probe commands from core, a separate tradeoff from this
+      # fix. The remaining one-way latency only ever makes the estimate more
+      # conservative (a longer wait), never early.
+      #
+      # How long a held estimate is trusted before a fresh sample is accepted
+      # unconditionally, win or lose. Not derived from any measurement - a
+      # round number chosen to bound how long a stale estimate (e.g. from a
+      # since-resolved network condition, or a *server*-side clock jump, which
+      # nothing here detects) can linger.
+      SERVER_TIME_OFFSET_STALE_SECONDS = 120
+      # If the wall clock (Time.now) and a monotonic clock disagree about how
+      # much time passed since the held estimate was set by more than this,
+      # the wall clock moved discontinuously (NTP step, VM resume, user
+      # changed the clock) and the held estimate is discarded outright rather
+      # than waited out over SERVER_TIME_OFFSET_STALE_SECONDS - which matters
+      # because a *forward* wall-clock step raises offset_true, and the min
+      # filter cannot recover from that on its own (every subsequent candidate
+      # rises by the same step, so it always loses to the stale, now-too-low
+      # held value) until this guard or the staleness window fires.
+      #
+      # `now - mono_now` in prompt_ingress_clocks reduces to Time.now.to_f
+      # minus a CLOCK_MONOTONIC read taken microseconds earlier either way
+      # (the ingress_mono term cancels out algebraically in the ingress
+      # branch), so wall-vs-monotonic drift is measurable here to microsecond
+      # precision, and the only legitimate non-zero source of it is clock
+      # slewing (NTP/chrony correcting drift gradually instead of stepping).
+      # This is deliberately tuned tight rather than to some slew-rate bound:
+      # the two failure directions aren't symmetric. Firing on ordinary slew
+      # just means one prompt is accepted unconditionally - the same thing
+      # every prompt did before this filter existed - so a false positive is
+      # nearly free. Missing a real step is the early-firing bug this guard
+      # exists to close. That asymmetry is why this stays tight even though
+      # some slew daemons (chrony's default max slew rate, for one) can
+      # legitimately exceed it.
+      SERVER_TIME_OFFSET_CLOCK_STEP_SECONDS = 0.25
+
       def initialize
         @buffer = String.new
         # @unescape = { 'lt' => '<', 'gt' => '>', 'quot' => '"', 'apos' => "'", 'amp' => '&' }
@@ -59,6 +120,8 @@ module Lich
         @nerve_tracker_active = 'no'
         @server_time = Time.now.to_i
         @server_time_offset = 0.0
+        @server_time_offset_at = nil
+        @server_time_offset_monotonic_at = nil
         @roundtime_end = 0
         @cast_roundtime_end = 0
         @last_pulse = Time.now.to_i
@@ -67,6 +130,11 @@ module Lich
         @next_level_text = String.new
         @current_target_ids = Array.new
         @pending_crtr_status = Hash.new
+        # GemStone mount inference: the last room-objs creature registered, and
+        # (once "who is riding" follows a rider="1" creature) the rider whose
+        # mount is the next bold creature link. See the room-objs text branch.
+        @last_room_creature = nil
+        @mount_rider = nil
         # DragonRealms stream-order name backfill: bold room-objs names and the
         # <crtrStatus> batch ids are both captured in order, then paired at the
         # following <prompt> - but only when their counts match exactly (an
@@ -181,7 +249,9 @@ module Lich
       def active_spells
         z = {}
         XMLData.dialogs.sort.each do |a, b|
-          b.each do |k, v|
+          # b is the live Hash the parser writes; iterate a copy so a new
+          # effect arriving mid-scan cannot raise in the parser thread
+          b.dup.each do |k, v|
             case a
             when /Active Spells|Buffs/
               z.merge!(k => v) if k.instance_of?(String)
@@ -222,6 +292,7 @@ module Lich
         # could misapply to an unrelated creature that later reuses the same
         # exist id (ids are recycled - see Creature.targets' notes).
         @pending_crtr_status.clear
+        @last_room_creature = @mount_rider = nil
         # A reset mid-fragment invalidates the room-objs<->crtrStatus pairing, so
         # drop any captured names and collected ids.
         @dr_room_npc_names = []
@@ -390,6 +461,41 @@ module Lich
         @sax_parse_errors << "#{message} (line #{line}, column #{column})"
       end
 
+      # [wall_time, monotonic_time] for the <prompt> handler's clock-sync math.
+      # Prefers Game.current_ingress_time - a monotonic reading the socket
+      # reader thread captured immediately after this string came off the
+      # wire, before it ever waited in the parser queue - over parse-time
+      # Time.now. Queue wait and parser-thread scheduling delay (a busy
+      # script, GC, the synchronous GameLoader.load! on login) are not real
+      # server-to-client latency; folding them in would inflate every
+      # candidate by however long the parser thread happened to be busy.
+      # Falls back to parse time when unavailable: Game may not be loaded at
+      # all (a spec exercising this class in isolation), or this call may not
+      # be happening on Game's own parser thread (current_ingress_time
+      # returns nil for any other caller, by design - see games.rb).
+      def prompt_ingress_clocks
+        ingress_mono = defined?(Game) && Game.respond_to?(:current_ingress_time) ? Game.current_ingress_time : nil
+        return [Time.now.to_f, Process.clock_gettime(Process::CLOCK_MONOTONIC)] unless ingress_mono
+
+        parse_mono = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        [Time.now.to_f - (parse_mono - ingress_mono), ingress_mono]
+      end
+
+      # Whether a new server_time_offset candidate should replace the held
+      # estimate - see the noise-model comment on the constants above for the
+      # reasoning (min-delay filter, staleness expiry, clock-step guard).
+      def accept_server_time_offset_candidate?(candidate, now, mono_now)
+        return true if @server_time_offset_at.nil?
+
+        wall_elapsed = now - @server_time_offset_at
+        return true if wall_elapsed > SERVER_TIME_OFFSET_STALE_SECONDS
+
+        mono_elapsed = mono_now - @server_time_offset_monotonic_at
+        return true if (wall_elapsed - mono_elapsed).abs > SERVER_TIME_OFFSET_CLOCK_STEP_SECONDS
+
+        candidate <= @server_time_offset
+      end
+
       def tag_start(name, attributes)
         # This is called once per element by REXML in games.rb
         # https://ruby-doc.org/stdlib-2.6.1/libdoc/rexml/rdoc/REXML/StreamListener.html
@@ -413,6 +519,7 @@ module Lich
             # that room - don't let it survive to misapply if the id gets
             # reused elsewhere.
             @pending_crtr_status.clear
+            @last_room_creature = @mount_rider = nil
             @check_obvious_hiding = true
             # The <nav rm='NNNN'/> tag is the authoritative room UID for every game, including
             # DragonRealms, which now emits it on every arrival (a plain <nav/> with no rm
@@ -458,6 +565,7 @@ module Lich
               # this component; clearing here gives that batch a clean snapshot.
               Lich::DragonRealms::Creature.clear_room if defined?(Lich::DragonRealms::Creature)
               @pending_crtr_status.clear
+              @last_room_creature = @mount_rider = nil
               # Start a fresh room-objs<->crtrStatus pairing for this refresh: the
               # bold names captured below and the crtrStatus ids that follow are
               # zipped at the next <prompt>, gated on equal counts.
@@ -651,8 +759,21 @@ module Lich
           end
 
           if name == 'prompt'
-            @server_time = attributes['time'].to_i
-            @server_time_offset = (Time.now.to_f - @server_time)
+            now, mono_now = prompt_ingress_clocks
+            new_server_time = attributes['time'].to_i
+
+            # server_time_offset is a converging min-delay estimate of the
+            # true client/server clock offset - see the noise-model comment
+            # on the constants above (SERVER_TIME_OFFSET_STALE_SECONDS et al)
+            # for why a smaller candidate always wins and what can override
+            # a held estimate that isn't smaller.
+            candidate = now - new_server_time
+            if accept_server_time_offset_candidate?(candidate, now, mono_now)
+              @server_time_offset = candidate
+              @server_time_offset_at = now
+              @server_time_offset_monotonic_at = mono_now
+            end
+            @server_time = new_server_time
             $_CLIENT_.puts "\034GSq#{sprintf('%010d', @server_time)}\r\n" if @send_fake_tags
 
             # A prompt terminates the command burst and is the reliable close
@@ -1077,14 +1198,28 @@ module Lich
                       dr_creature = Lich::DragonRealms::Creature.register(text_string, @obj_exist, @obj_noun)
                       dr_creature&.apply_room_name(text_string)
                     end
-                  elsif XMLData.current_target_ids.include?(@obj_exist) || @pending_crtr_status.key?(@obj_exist)
-                    creature = Creature.register(text_string, @obj_exist, @obj_noun)
-                    if creature && (pending_flags = @pending_crtr_status.delete(@obj_exist))
-                      creature.sync_crtr_status(pending_flags)
+                  else
+                    creature = nil
+                    if XMLData.current_target_ids.include?(@obj_exist) || @pending_crtr_status.key?(@obj_exist) || @mount_rider
+                      creature = Creature.register(text_string, @obj_exist, @obj_noun)
+                      if creature && (pending_flags = @pending_crtr_status.delete(@obj_exist))
+                        creature.sync_crtr_status(pending_flags)
+                      end
                     end
+                    # A ridden mount sends no <crtrStatus> until first harmed,
+                    # so stand in its flags from the rider's tag until it does.
+                    # Hostility is left to the target dropdown (see
+                    # Creature.targets). Re-inferred on every refresh, so a
+                    # mount whose rider has left loses the flag.
+                    creature&.infer_crtr_flags(@mount_rider ? { mount: true } : {})
+                    @mount_rider = nil
+                    @last_room_creature = creature
                   end
                 else
                   GameObj.new_loot(@obj_exist, @obj_noun, text_string)
+                  # The mount link always directly follows "who is riding";
+                  # a non-bold one must not arm the next bold creature.
+                  @mount_rider = nil
                 end
               elsif @bold && XMLData.game =~ /^DR/
                 # DragonRealms room-objs bold NPC names carry no <a> tag. Capture
@@ -1099,6 +1234,13 @@ module Lich
                 # never sets it), so the &. keeps this a safe no-op in DR while
                 # still annotating the last GemStone npc.
                 @last_npc&.status = $1
+              end
+              # GemStone: "<rider> who is riding <mount>". Its own check, not a
+              # link in the chain above, so a rider's "(dead)"/"(stunned)"
+              # annotation in the same text run still reaches @last_npc. Only
+              # trusted when the game itself flagged the rider rider="1".
+              if !@active_tags.include?('a') && text_string =~ /\bwho is riding\b/ && @last_room_creature&.crtr_flag?(:rider)
+                @mount_rider = @last_room_creature
               end
             elsif @active_ids.include?('room players')
               if @active_tags.include?('a')
