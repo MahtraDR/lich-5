@@ -2,6 +2,7 @@
 
 require_relative '../../../spec_helper'
 require 'common/creature/creature_base'
+require 'common/gameobj'
 
 # Exercises the game-agnostic Lich::Common::CreatureBase mixin directly, through
 # a minimal host class that stands in for a real game's CreatureInstance. The
@@ -148,6 +149,67 @@ RSpec.describe Lich::Common::CreatureBase do
   end
 
   describe '#sync_crtr_status' do
+    it 'stores exact positive health values in the existing fields' do
+      creature = SampleCreature.register('kobold', 1)
+
+      creature.sync_crtr_status('health' => '75', 'maxhealth' => '120')
+
+      expect(creature.health).to eq(75)
+      expect(creature.max_health).to eq(120)
+    end
+
+    it 'preserves negative health without clamping it to zero' do
+      creature = SampleCreature.register('kobold', 1)
+
+      creature.sync_crtr_status('health' => '-16', 'maxhealth' => '120')
+
+      expect(creature.health).to eq(-16)
+      expect(creature.max_health).to eq(120)
+    end
+
+    it 'preserves legitimate zero values' do
+      creature = SampleCreature.register('kobold', 1)
+
+      creature.sync_crtr_status('health' => '0', 'maxhealth' => '0')
+
+      expect(creature.health).to eq(0)
+      expect(creature.max_health).to eq(0)
+    end
+
+    it 'replaces exact health values on every subsequent snapshot' do
+      creature = SampleCreature.register('kobold', 1)
+      creature.sync_crtr_status('health' => '75', 'maxhealth' => '120')
+
+      creature.sync_crtr_status('health' => '44', 'maxhealth' => '100')
+
+      expect(creature.health).to eq(44)
+      expect(creature.max_health).to eq(100)
+    end
+
+    it 'clears exact health values when a complete snapshot omits them' do
+      creature = SampleCreature.register('kobold', 1)
+      creature.sync_crtr_status('health' => '75', 'maxhealth' => '120')
+
+      creature.sync_crtr_status('hostile' => '1')
+
+      expect(creature.health).to be_nil
+      expect(creature.max_health).to be_nil
+    end
+
+    it 'rejects anything other than complete signed or unsigned decimal integers' do
+      creature = SampleCreature.register('kobold', 1)
+
+      creature.sync_crtr_status('health' => '75hp', 'maxhealth' => '120.0')
+
+      expect(creature.health).to be_nil
+      expect(creature.max_health).to be_nil
+
+      creature.sync_crtr_status('health' => ' 75 ', 'maxhealth' => '1_20')
+
+      expect(creature.health).to be_nil
+      expect(creature.max_health).to be_nil
+    end
+
     it 'maps XML flag spellings onto the canonical status vocabulary' do
       creature = SampleCreature.register('kobold', 1)
 
@@ -214,6 +276,83 @@ RSpec.describe Lich::Common::CreatureBase do
       creature.sync_crtr_status('hostile' => '1')
 
       expect(creature.statuses).to be_empty
+    end
+  end
+
+  describe '#infer_crtr_flags' do
+    it 'answers crtr_flag? until a real tag arrives, without setting crtr_flags?' do
+      creature = SampleCreature.register('mastodon', 1)
+      creature.infer_crtr_flags(mount: true)
+
+      expect(creature.crtr_flag?(:mount)).to be true
+      expect(creature.crtr_flags?).to be false
+
+      creature.sync_crtr_status('hostile' => '1')
+      expect(creature.crtr_flag?(:mount)).to be false
+      expect(creature.crtr_flags?).to be true
+    end
+
+    it 'replaces the previous inference rather than merging into it' do
+      creature = SampleCreature.register('mastodon', 1)
+      creature.infer_crtr_flags(mount: true)
+      creature.infer_crtr_flags({})
+
+      expect(creature.crtr_flag?(:mount)).to be false
+    end
+  end
+
+  describe '#ever_hostile?' do
+    it 'is false for a creature the feed has never called hostile' do
+      creature = SampleCreature.register('kobold', 1)
+      expect(creature.ever_hostile?).to be false
+
+      creature.sync_crtr_status('sympathetic' => '1')
+      expect(creature.ever_hostile?).to be false
+    end
+
+    # Sympathy (1120) replaces hostile with sympathetic in the next snapshot.
+    it 'stays true after a later tag drops hostile' do
+      creature = SampleCreature.register('kobold', 1)
+      creature.sync_crtr_status('hostile' => '1', 'inferior' => '1')
+
+      creature.sync_crtr_status('sympathetic' => '1', 'inferior' => '1')
+
+      expect(creature.crtr_flag?(:hostile)).to be false
+      expect(creature.ever_hostile?).to be true
+    end
+
+    # Accepted trade-off: re-registering a live id keeps the instance and its
+    # latch. That keeps a Sympathy'd creature you walk away from and return to
+    # targeted, but a same-name creature reusing a recycled id before eviction
+    # inherits it too (GS's name-change forget in #1669 only covers a new name).
+    it 'keeps the latch when a known id re-enters the room under the same name' do
+      old = SampleCreature.register('nymph', 1)
+      old.sync_crtr_status('hostile' => '1')
+      SampleCreature.clear_room
+
+      again = SampleCreature.register('nymph', 1)
+      again.sync_crtr_status('sympathetic' => '1')
+
+      expect(again).to equal(old)
+      expect(again.ever_hostile?).to be true
+      expect(SampleCreature.targets.map(&:id)).to eq([1])
+    end
+
+    # The latch lives on the instance, so eviction is its only reset.
+    it 'starts false again once housekeeping evicts the registry entry' do
+      old = SampleCreature.register('nymph', 1)
+      old.sync_crtr_status('hostile' => '1')
+      old.instance_variable_set(:@last_seen_at, Time.now - 3600)
+      SampleCreature.clear_room
+      SampleCreature.clear_room # second refresh: out of the previous roster's shelter too
+      expect(SampleCreature.cleanup_old(600)).to eq(1)
+
+      fresh = SampleCreature.register('nymph', 1)
+      fresh.sync_crtr_status('sympathetic' => '1')
+
+      expect(fresh).not_to equal(old)
+      expect(fresh.ever_hostile?).to be false
+      expect(SampleCreature.targets).to eq([])
     end
   end
 
@@ -350,6 +489,67 @@ RSpec.describe Lich::Common::CreatureBase do
       expect(SampleCreature.targets).to eq([])
     end
 
+    it 'keeps targeting a creature flipped from hostile to sympathetic' do
+      creature = SampleCreature.register('nymph', 1)
+      creature.sync_crtr_status('hostile' => '1')
+      creature.sync_crtr_status('sympathetic' => '1')
+
+      expect(SampleCreature.targets.map(&:id)).to eq([1])
+    end
+
+    it 'does not target a creature that was only ever sympathetic' do
+      SampleCreature.register('nymph', 1).sync_crtr_status('sympathetic' => '1')
+
+      expect(SampleCreature.targets).to eq([])
+    end
+
+    it 'does not target a once-hostile sympathetic creature that is dead' do
+      creature = SampleCreature.register('nymph', 1)
+      creature.sync_crtr_status('hostile' => '1')
+      creature.sync_crtr_status('sympathetic' => '1', 'dead' => '1')
+
+      expect(SampleCreature.targets).to eq([])
+    end
+
+    it 'picks up a first-seen-sympathetic creature once hostile reasserts' do
+      creature = SampleCreature.register('nymph', 1)
+      creature.sync_crtr_status('sympathetic' => '1')
+      expect(SampleCreature.targets).to eq([])
+
+      creature.sync_crtr_status('hostile' => '1') # Sympathy expired
+      expect(SampleCreature.targets.map(&:id)).to eq([1])
+
+      creature.sync_crtr_status('sympathetic' => '1') # recast
+      expect(SampleCreature.targets.map(&:id)).to eq([1])
+    end
+
+    # ever_hostile? never un-latches; only a live sympathetic may lean on it.
+    it 'drops a once-hostile creature that turns neutral rather than sympathetic' do
+      creature = SampleCreature.register('nymph', 1)
+      creature.sync_crtr_status('hostile' => '1')
+      creature.sync_crtr_status('inferior' => '1')
+
+      expect(SampleCreature.targets).to eq([])
+    end
+
+    it 'drops a neutral creature again after a brief hostile flip' do
+      creature = SampleCreature.register('rabbit', 1)
+      creature.sync_crtr_status({})
+      creature.sync_crtr_status('hostile' => '1')
+      expect(SampleCreature.targets.map(&:id)).to eq([1])
+
+      creature.sync_crtr_status({})
+      expect(SampleCreature.targets).to eq([])
+    end
+
+    it 'keeps an explicit :hostile filter literal for a flipped creature' do
+      creature = SampleCreature.register('nymph', 1)
+      creature.sync_crtr_status('hostile' => '1')
+      creature.sync_crtr_status('sympathetic' => '1')
+
+      expect(SampleCreature.targets(:hostile)).to eq([])
+    end
+
     it 'AND-filters targets on a named flag, honouring not_ negation' do
       prone = SampleCreature.register('kobold', 1)
       prone.sync_crtr_status('hostile' => '1', 'prone' => '1')
@@ -372,6 +572,31 @@ RSpec.describe Lich::Common::CreatureBase do
       SampleCreature.register('corpse', 1).sync_crtr_status('hostile' => '1', 'dead' => '1')
 
       expect(SampleCreature.in_room(:dead).map(&:id)).to eq([1])
+    end
+
+    it 'targets an unreported creature only while GameObj.targets lists it and the feed is silent' do
+      SampleCreature.register('mastodon', 1)
+      allow(Lich::Common::GameObj).to receive(:targets).and_return([double(id: '1')])
+      expect(SampleCreature.targets.map(&:id)).to eq([1])
+
+      SampleCreature[1].sync_crtr_status('hostile' => '0')
+      expect(SampleCreature.targets).to eq([])
+    end
+
+    it 'does not target an unreported creature GameObj.targets excludes' do
+      # e.g. listed in the sticky dropdown but dead/gone, an animated decoy or
+      # a severed appendage - GameObj.targets owns that exclusion list.
+      SampleCreature.register('mastodon', 1)
+      allow(Lich::Common::GameObj).to receive(:targets).and_return([])
+
+      expect(SampleCreature.targets).to eq([])
+    end
+
+    it 'does not consult GameObj.targets when every creature is tagged' do
+      SampleCreature.register('kobold', 1).sync_crtr_status('hostile' => '1')
+      expect(Lich::Common::GameObj).not_to receive(:targets)
+
+      expect(SampleCreature.targets.map(&:id)).to eq([1])
     end
 
     it 'sources room membership from the roster, not the registry alone' do
