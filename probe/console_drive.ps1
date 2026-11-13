@@ -114,7 +114,10 @@ public static class ConsoleDriver {
     Thread.Sleep(500);
     screen = Screen();
     string code = p.HasExited ? p.ExitCode.ToString() : "still-running";
-    if (!p.HasExited) { try { p.Kill(); } catch { } }
+    if (!p.HasExited) {
+      // Kill the whole tree: the shell's ruby child would otherwise linger.
+      try { Process.Start(new ProcessStartInfo("taskkill", "/T /F /PID " + p.Id) { UseShellExecute = false, CreateNoWindow = true }).WaitForExit(10000); } catch { }
+    }
     FreeConsole();
     return "EXIT=" + code + "\nSAW_PROMPT=" + sawPrompt + "\nTYPED=" + typed + "\n----- SCREEN -----\n" + screen + "----- END SCREEN -----";
   }
@@ -124,10 +127,12 @@ public static class ConsoleDriver {
 $repo = (Get-Location).Path
 $failures = @()
 
-function Invoke-Case($name, $file, $cmdArgs, $waitFor, $typed, $mustSee, $mustNotSee, $required) {
+# Screen lines are read back with trailing spaces trimmed, so match prompts
+# without their trailing space.
+function Invoke-Case($name, $file, $cmdArgs, $waitFor, $typed, $mustSee, $mustNotSee, $required, $timeoutMs = 90000) {
   $stderrLog = Join-Path $repo 'probe\probe-stderr.log'
   Remove-Item $stderrLog -ErrorAction SilentlyContinue
-  $out = [ConsoleDriver]::Run($file, $cmdArgs, $repo, $waitFor, $typed, 240000)
+  $out = [ConsoleDriver]::Run($file, $cmdArgs, $repo, $waitFor, $typed, $timeoutMs)
   "===== CASE: $name ($file $cmdArgs)"
   $out
   if (Test-Path $stderrLog) { "probe-stderr.log: [" + (Get-Content -Raw $stderrLog) + "]" }
@@ -140,19 +145,22 @@ function Invoke-Case($name, $file, $cmdArgs, $waitFor, $typed, $mustSee, $mustNo
 
 $probe = 'bundle exec ruby probe\read_secret_probe.rb'
 $typed = "  typed SECRET `r"
-$expect = @('Password: ', 'RESULT len=15 exact=true', 'PROBE-DONE')
+$expect = @('Password:', 'RESULT len=15 exact=true', 'PROBE-DONE')
 
-Invoke-Case 'cmd prompt' 'cmd.exe' "/d /c $probe" 'Password: ' $typed $expect @('typed SECRET') $true
-Invoke-Case 'Windows PowerShell prompt' 'powershell.exe' "-NoProfile -Command $probe" 'Password: ' $typed $expect @('typed SECRET') $true
-Invoke-Case 'pwsh prompt' 'pwsh.exe' "-NoProfile -Command $probe" 'Password: ' $typed $expect @('typed SECRET') $true
-Invoke-Case 'cmd Ctrl+Z (end-of-input)' 'cmd.exe' "/d /c $probe" 'Password: ' "$([char]0x1A)`r" @('Password: ', 'PROBE-DONE') @() $false
+Invoke-Case 'cmd prompt' 'cmd.exe' "/d /c $probe" 'Password:' $typed $expect @('typed SECRET') $true
+Invoke-Case 'Windows PowerShell prompt' 'powershell.exe' "-NoProfile -Command $probe" 'Password:' $typed $expect @('typed SECRET') $true
+Invoke-Case 'pwsh prompt' 'pwsh.exe' "-NoProfile -Command $probe" 'Password:' $typed $expect @('typed SECRET') $true
+Invoke-Case 'cmd Ctrl+Z (end-of-input)' 'cmd.exe' "/d /c $probe" 'Password:' "$([char]0x1A)`r" @('Password:', 'PROBE-DONE') @() $false
 
 # Full lich.rbw path, report-only: startup on a CI Ruby may stop earlier for
 # unrelated gem-check reasons. The seeded account makes -aa stop at "already
 # exists" before it would authenticate.
 New-Item -ItemType Directory -Force (Join-Path $repo 'data') | Out-Null
 Set-Content -Path (Join-Path $repo 'data\entry.yaml') -Value "encryption_mode: plaintext`naccounts:`n  ZZTEST:`n    password: x`n    characters: []"
-Invoke-Case 'lich.rbw -aa via cmd' 'cmd.exe' '/d /c bundle exec ruby lich.rbw -aa zztest --no-gtk' 'Password: ' "typed-LICH-secret`r" @('Password: ', 'already exists') @('typed-LICH-secret') $false
+Invoke-Case 'lich.rbw -aa via cmd' 'cmd.exe' '/d /c bundle exec ruby lich.rbw -aa zztest --no-gtk' 'Password:' "typed-LICH-secret`r" @('Password:', 'already exists') @('typed-LICH-secret') $false 150000
+$debugLog = Get-ChildItem (Join-Path $repo 'temp') -Filter 'debug-*.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1
+if ($debugLog) { "----- newest debug log: $($debugLog.Name)"; Get-Content $debugLog.FullName -Tail 40 } else { '----- no temp/debug-*.log written' }
+Get-ChildItem (Join-Path $repo 'temp') -ErrorAction SilentlyContinue | Select-Object Name, Length | Format-Table | Out-String
 
 if ($failures.Count -gt 0) { "FAILED: $($failures -join ', ')"; exit 1 }
 'ALL REQUIRED CASES PASSED'
