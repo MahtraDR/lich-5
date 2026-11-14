@@ -7,6 +7,17 @@ require_relative '../lib/common/authentication/cli_password'
 
 # Mirror lib/init.rb: by the time CLI commands run, $stderr is the debug log.
 $stderr = File.open(File.join(__dir__, 'probe-stderr.log'), 'w')
+if ENV['PROBE_DELAY']
+  # Gives the driver a window to type before the prompt, like a slow startup.
+  $stdout.puts 'READY'
+  $stdout.flush
+  sleep Float(ENV['PROBE_DELAY'])
+end
+if ENV['PROBE_NO_IFLUSH']
+  # Control: without the flush, the early line must be what gets read.
+  require 'io/console'
+  def $stdin.iflush; end
+end
 begin
   s = Lich::Common::Authentication::CLIPassword.read_secret('Password: ', from_stdin: false)
   $stdout.puts "RESULT len=#{s.length} exact=#{s == '  typed SECRET '}"
