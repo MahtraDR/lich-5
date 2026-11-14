@@ -43,6 +43,17 @@ RSpec.describe Lich::Main::HelpText do
       expect(described_class.render('accounts')).to include(%(printf '%s\\n' "$PASSWORD" | lich --add-account MYACCOUNT --password-stdin))
     end
 
+    it 'says how the --add-account password is supplied, and on which shells each example works' do
+      output = described_class.render('accounts')
+
+      expect(output).to include('Prompted for on the terminal; what you type is not shown.')
+      expect(output).to include('--password-stdin reads the first line of standard input instead.')
+      expect(output).to include('Leading and trailing spaces are part of the password.')
+      expect(output).to include('Windows PowerShell 5.1 changes non-ASCII characters')
+      expect(output).to match(/# sh, bash, zsh:\n\s+printf /)
+      expect(output).to match(/# PowerShell 7:\n\s+\$env:PASSWORD \| lich --add-account MYACCOUNT --password-stdin/)
+    end
+
     it 'lists every game code --game-code accepts' do
       output = described_class.render('accounts')
 

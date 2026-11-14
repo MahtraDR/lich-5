@@ -152,6 +152,13 @@ module Lich
             --convert-entries MODE
             --change-encryption-mode MODE [--master-password PASSWORD]
 
+          Password for --add-account:
+            Prompted for on the terminal; what you type is not shown.
+            --password-stdin reads the first line of standard input instead.
+            Leading and trailing spaces are part of the password.
+            On Windows, pipe it from PowerShell 7 (pwsh) or cmd.
+            Windows PowerShell 5.1 changes non-ASCII characters in a pipe.
+
           Modes:
             plaintext
             standard
@@ -165,7 +172,10 @@ module Lich
 
           Examples:
             lich --add-account MYACCOUNT --frontend stormfront
+            # sh, bash, zsh:
             printf '%s\\n' "$PASSWORD" | lich --add-account MYACCOUNT --password-stdin
+            # PowerShell 7:
+            $env:PASSWORD | lich --add-account MYACCOUNT --password-stdin
             lich --refresh-characters MYACCOUNT
             lich --add-character MYACCOUNT NewCharName --game-code DR
             lich --change-account-password MYACCOUNT NEWPASSWORD
