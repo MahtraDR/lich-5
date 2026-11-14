@@ -16,8 +16,9 @@ module Lich
   module Common
     module CLI
       # Orchestrates CLI operations: early-exit handlers for password management,
-      # data conversion, and login flow. Uses CliOptionsRegistry for declarative
-      # option registration and handler execution.
+      # data conversion, and login flow. Dispatches from
+      # OneShotCommands::HANDLERS, the table gem recovery also reads to decide
+      # whether to relaunch a command after a repair.
       module CLIOrchestration
         # Execute registered CLI operations
         # Processes ARGV for early-exit CLI operations (password mgmt, conversion)

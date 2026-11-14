@@ -62,7 +62,7 @@ RSpec.describe Lich::DependencyRecovery do
     }
   end
 
-  def recovery(artifacts:, extract_zip: nil, install_gem: nil, powershell_runner: nil, helper_launcher: nil)
+  def recovery(artifacts:, extract_zip: nil, install_gem: nil, powershell_runner: nil, helper_launcher: nil, relaunch: true)
     described_class.new(
       manifest_url: manifest_url,
       gem_home: gem_home,
@@ -71,7 +71,8 @@ RSpec.describe Lich::DependencyRecovery do
       install_gem: install_gem || ->(path, home) { installed << [File.basename(path), home, File.binread(path)] },
       extract_zip: extract_zip,
       powershell_runner: powershell_runner,
-      helper_launcher: helper_launcher
+      helper_launcher: helper_launcher,
+      relaunch: relaunch
     )
   end
 
@@ -436,7 +437,7 @@ RSpec.describe Lich::DependencyRecovery do
     expect(installed).to be_empty
   end
 
-  it 'schedules a native replacement without a relaunch or the arguments of a one-shot command' do
+  it 'schedules a native replacement without a relaunch or the arguments when told not to relaunch' do
     body = 'native gem payload'
     unit = {
       'id'            => 'ox',
@@ -450,7 +451,8 @@ RSpec.describe Lich::DependencyRecovery do
     written = []
     subject = recovery(
       artifacts: { manifest_url => manifest_for([unit], ruby_abi: ruby_abi, platform: platform), artifact_url => body },
-      helper_launcher: ->(payload_path) { written << File.read(payload_path) }
+      helper_launcher: ->(payload_path) { written << File.read(payload_path) },
+      relaunch: false
     )
 
     result = subject.recover(['ox'])
@@ -462,7 +464,7 @@ RSpec.describe Lich::DependencyRecovery do
     expect(written.fetch(0)).not_to include('account-pw-fixture')
   end
 
-  it 'schedules a native replacement that relaunches a session with its original arguments' do
+  it 'schedules a native replacement that relaunches with the original arguments when told to' do
     body = 'native gem payload'
     unit = {
       'id'            => 'ox',
@@ -472,7 +474,9 @@ RSpec.describe Lich::DependencyRecovery do
       'install_order' => ['ox']
     }
     allow(Gem).to receive(:win_platform?).and_return(true)
-    stub_const('ARGV', ['--login', 'Doug'])
+    # A one-shot flag: the recovery object follows the relaunch it was given
+    # and never reads ARGV to decide; GemCheck.relaunch_after_repair? does.
+    stub_const('ARGV', ['--login', 'Doug', '-aa'])
     payloads = []
     subject = recovery(
       artifacts: { manifest_url => manifest_for([unit], ruby_abi: ruby_abi, platform: platform), artifact_url => body },
@@ -481,7 +485,7 @@ RSpec.describe Lich::DependencyRecovery do
 
     subject.recover(['ox'])
 
-    expect(payloads.fetch(0).fetch('restart').fetch('argv')).to eq(['--login', 'Doug'])
+    expect(payloads.fetch(0).fetch('restart').fetch('argv')).to eq(['--login', 'Doug', '-aa'])
   end
 
   describe 'native replacement rollback' do
@@ -794,6 +798,20 @@ RSpec.describe Lich::DependencyRecovery do
 
       expect(original_files.map { |file| File.read(file) }).to all(eq('replacement'))
       expect(subject).not_to have_received(:restart_lich)
+      expect(File).not_to exist(work_dir)
+    end
+
+    {
+      'arguments that are not an array'  => [{ 'argv' => 'lich.rbw -aa DOUG' }, /restart arguments must be an array/],
+      'a program that does not exist'    => [{ 'program' => '/nonexistent/lich.rbw' }, /program is invalid/],
+      'a working directory that is gone' => [{ 'chdir' => '/nonexistent/lich' }, /working directory is invalid/]
+    }.each do |problem, (override, message)|
+      it "rejects a restart object with #{problem} before installing anything" do
+        payload['restart'] = payload.fetch('restart').merge(override)
+        expect(installer).not_to receive(:call)
+
+        expect { subject.send(:run_windows_replacement!, payload) }.to raise_error(described_class::Error, message)
+      end
     end
 
     it 'still rejects a restart entry that is present but malformed' do

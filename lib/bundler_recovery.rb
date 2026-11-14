@@ -6,7 +6,6 @@ require 'open3'
 require 'rbconfig'
 require 'rubygems/installer'
 require 'tmpdir'
-require_relative 'common/cli/one_shot_commands'
 
 module Lich
   # Recovers missing non-GTK runtime gems on macOS. Bundler resolves and builds
@@ -31,7 +30,8 @@ module Lich
       end
 
       # Runs after the Lich process exits. The helper owns promotion, rollback,
-      # cleanup, and restart so the running Ruby never changes its own gems.
+      # cleanup, and the relaunch (sessions only; a one-shot command's payload
+      # has no restart) so the running Ruby never changes its own gems.
       def run_macos_replacement(payload_path)
         payload = nil
         payload = JSON.parse(File.read(payload_path))
@@ -70,7 +70,14 @@ module Lich
       end
     end
 
-    def initialize(lich_dir:, gem_home: Gem.dir, helper_launcher: nil, installer: nil)
+    # @param lich_dir [String] the Lich installation directory
+    # @param gem_home [String] the RubyGems home the helper promotes into
+    # @param helper_launcher [#call, nil] test seam that starts the helper
+    # @param installer [#call, nil] test seam that installs one gem file
+    # @param relaunch [Boolean] whether the helper relaunches Lich with its
+    #   original arguments; GemCheck passes false for a one-shot command
+    def initialize(lich_dir:, gem_home: Gem.dir, helper_launcher: nil, installer: nil, relaunch: true)
+      @relaunch = relaunch
       @lich_dir = File.expand_path(lich_dir)
       @gem_home = File.expand_path(gem_home)
       @helper_launcher = helper_launcher || method(:launch_macos_helper)
@@ -213,12 +220,12 @@ module Lich
       }
     end
 
-    # What the helper relaunches once the repair is done, or nil for a one-shot
-    # command: its relaunch would run with output discarded, and its arguments
-    # can carry passwords that would otherwise be written into the payload.
-    # GemCheck.exit_after_scheduled_repair! tells the user to rerun it instead.
+    # What the helper relaunches once the repair is done, or nil when GemCheck
+    # asked for no relaunch (a one-shot command: its relaunch would run with
+    # output discarded, and its arguments can carry passwords that would
+    # otherwise be written into the payload).
     def restart_target
-      return nil if Lich::Common::CLI::OneShotCommands.present?(ARGV)
+      return nil unless @relaunch
 
       { 'program' => File.join(@lich_dir, 'lich.rbw'), 'argv' => ARGV, 'chdir' => @lich_dir }
     end

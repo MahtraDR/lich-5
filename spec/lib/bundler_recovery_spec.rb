@@ -17,12 +17,12 @@ RSpec.describe Lich::BundlerRecovery do
     end
   end
 
-  def recovery(installer: nil, &launcher)
+  def recovery(installer: nil, relaunch: true, &launcher)
     helper = lambda do |path|
       launcher.call(path)
       FileUtils.rm_rf(File.dirname(path)) # Mirrors detached helper cleanup in unit tests.
     end
-    described_class.new(lich_dir: @lich_dir, gem_home: @gem_home, helper_launcher: helper, installer: installer)
+    described_class.new(lich_dir: @lich_dir, gem_home: @gem_home, helper_launcher: helper, installer: installer, relaunch: relaunch)
   end
 
   before { allow(described_class).to receive(:supported?).and_return(true) }
@@ -77,6 +77,17 @@ RSpec.describe Lich::BundlerRecovery do
       expect(payload.fetch('packages')).to eq([{ 'name' => 'ox', 'version' => '2.14.28', 'full_name' => 'ox-2.14.28', 'path' => '/verified/ox.gem' }])
       expect(File.directory?(payload.fetch('work_dir'))).to be(false)
       expect(File).not_to exist(File.join(@lich_dir, '.lich-bundler-gems'))
+    end
+
+    it 'writes no restart and no arguments into the payload file when told not to relaunch' do
+      stub_const('ARGV', ['--change-master-password', 'old-master-pw', 'new-master-pw'])
+      written = nil
+      subject = recovery(relaunch: false) { |path| written = File.read(path) }
+
+      expect(subject.recover(['ox'])).to be_success
+
+      expect(JSON.parse(written)).to include('restart' => nil)
+      expect(written).not_to include('master-pw')
     end
 
     it 'uses a staged lockfile in frozen mode when one was shipped' do
@@ -141,21 +152,28 @@ RSpec.describe Lich::BundlerRecovery do
     it 'relaunches a session with its original arguments' do
       stub_const('ARGV', ['--login', 'Doug', '--frontend', 'wizard'])
 
-      payload = recovery { |_| }.send(:promotion_payload, @lich_dir, packages)
+      payload = recovery(relaunch: true) { |_| }.send(:promotion_payload, @lich_dir, packages)
 
       expect(payload.fetch('restart')).to eq(
         'program' => File.join(@lich_dir, 'lich.rbw'), 'argv' => ['--login', 'Doug', '--frontend', 'wizard'], 'chdir' => @lich_dir
       )
     end
 
-    it 'leaves a one-shot command and its password out of the payload' do
+    it 'leaves the command and its password out of the payload when told not to relaunch' do
       stub_const('ARGV', ['--change-master-password', 'old-master-pw', 'new-master-pw'])
 
-      payload = recovery { |_| }.send(:promotion_payload, @lich_dir, packages)
+      payload = recovery(relaunch: false) { |_| }.send(:promotion_payload, @lich_dir, packages)
 
       expect(payload).to have_key('restart')
       expect(payload.fetch('restart')).to be_nil
       expect(JSON.generate(payload)).not_to include('master-pw')
+    end
+
+    it 'follows the relaunch it was given, not its own reading of ARGV' do
+      stub_const('ARGV', ['-aa', 'DOUG'])
+
+      expect(recovery(relaunch: true) { |_| }.send(:promotion_payload, @lich_dir, packages).fetch('restart'))
+        .to include('argv' => ['-aa', 'DOUG'])
     end
   end
 

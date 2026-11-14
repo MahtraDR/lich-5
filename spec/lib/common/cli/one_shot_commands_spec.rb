@@ -32,10 +32,32 @@ RSpec.describe Lich::Common::CLI::OneShotCommands do
         ['--session-infox'],
         ['--active-sessions-now'],
         ['x--active-sessions'],
-        ['x--session-info=Doug']
+        ['x--session-info=Doug'],
+        ['--login', 'Doug', '--session-info']
       ].each do |argv|
         expect(described_class.present?(argv)).to be(false), argv.inspect
       end
+    end
+  end
+
+  describe '.session_query?' do
+    it 'matches exactly the command lines ActiveSessionsQuery answers' do
+      query = Lich::Common::CLI::ActiveSessionsQuery
+      words = ['--active-sessions', '--session-info', '--session-info=', '--session-info=Doug', 'Doug', '--login', '-aa', 'x']
+      argvs = [[]] + words.map { |word| [word] } + words.product(words) + words.product(words, words)
+
+      argvs.each do |argv|
+        stub_const('ARGV', argv)
+        # What ActiveSessionsQuery.run acts on: the snapshot flag or a session name.
+        answered = argv.include?('--active-sessions') || !query.requested_session_name.nil?
+        expect(described_class.session_query?(argv)).to eq(answered), argv.inspect
+        expect(query.query_requested?).to eq(answered), argv.inspect
+      end
+    end
+
+    it 'treats a bare trailing --session-info as a session start, as the dispatcher does' do
+      expect(described_class.session_query?(['--login', 'Doug', '--session-info'])).to be(false)
+      expect(described_class.present?(['--login', 'Doug', '--session-info'])).to be(false)
     end
   end
 
