@@ -88,6 +88,10 @@ public static class ConsoleDriver {
   }
 
   public static string Run(string file, string args, string dir, string waitFor, string input, int timeoutMs) {
+    return Run2(file, args, dir, null, null, waitFor, input, timeoutMs);
+  }
+
+  public static string Run2(string file, string args, string dir, string preWait, string preInput, string waitFor, string input, int timeoutMs) {
     var psi = new ProcessStartInfo(file, args);
     psi.UseShellExecute = true;           // a console program started this way gets a new console
     psi.WorkingDirectory = dir;
@@ -101,6 +105,15 @@ public static class ConsoleDriver {
     }
     if (!attached) return "ATTACH_FAILED=" + Marshal.GetLastWin32Error();
     string screen = "";
+    string preTyped = "none";
+    if (preWait != null) {
+      while (DateTime.UtcNow < deadline) {
+        screen = Screen();
+        if (screen.Contains(preWait) || p.HasExited) break;
+        Thread.Sleep(100);
+      }
+      if (screen.Contains(preWait)) preTyped = Type(preInput);
+    }
     while (DateTime.UtcNow < deadline) {
       screen = Screen();
       if (screen.Contains(waitFor) || p.HasExited) break;
@@ -119,7 +132,7 @@ public static class ConsoleDriver {
       try { Process.Start(new ProcessStartInfo("taskkill", "/T /F /PID " + p.Id) { UseShellExecute = false, CreateNoWindow = true }).WaitForExit(10000); } catch { }
     }
     FreeConsole();
-    return "EXIT=" + code + "\nSAW_PROMPT=" + sawPrompt + "\nTYPED=" + typed + "\n----- SCREEN -----\n" + screen + "----- END SCREEN -----";
+    return "EXIT=" + code + "\nPRE_TYPED=" + preTyped + "\nSAW_PROMPT=" + sawPrompt + "\nTYPED=" + typed + "\n----- SCREEN -----\n" + screen + "----- END SCREEN -----";
   }
 }
 '@
@@ -129,10 +142,10 @@ $failures = @()
 
 # Screen lines are read back with trailing spaces trimmed, so match prompts
 # without their trailing space.
-function Invoke-Case($name, $file, $cmdArgs, $waitFor, $typed, $mustSee, $mustNotSee, $required, $timeoutMs = 90000) {
+function Invoke-Case($name, $file, $cmdArgs, $waitFor, $typed, $mustSee, $mustNotSee, $required, $timeoutMs = 90000, $preWait = $null, $preInput = $null) {
   $stderrLog = Join-Path $repo 'probe\probe-stderr.log'
   Remove-Item $stderrLog -ErrorAction SilentlyContinue
-  $out = [ConsoleDriver]::Run($file, $cmdArgs, $repo, $waitFor, $typed, $timeoutMs)
+  $out = [ConsoleDriver]::Run2($file, $cmdArgs, $repo, $preWait, $preInput, $waitFor, $typed, $timeoutMs)
   "===== CASE: $name ($file $cmdArgs)"
   $out
   if (Test-Path $stderrLog) { "probe-stderr.log: [" + (Get-Content -Raw $stderrLog) + "]" }
@@ -152,12 +165,45 @@ Invoke-Case 'Windows PowerShell prompt' 'powershell.exe' "-NoProfile -Command $p
 Invoke-Case 'pwsh prompt' 'pwsh.exe' "-NoProfile -Command $probe" 'Password:' $typed $expect @('typed SECRET') $true
 Invoke-Case 'cmd Ctrl+Z (end-of-input)' 'cmd.exe' "/d /c $probe" 'Password:' "$([char]0x1A)`r" @('Password:', 'PROBE-DONE') @() $false
 
+# Type-ahead: typed after READY, before the prompt. The flush must discard it.
+$env:PROBE_DELAY = '4'
+Invoke-Case 'cmd type-ahead discarded' 'cmd.exe' "/d /c $probe" 'Password:' $typed $expect @() $true 90000 'READY' "EARLYTYPED`r"
+$env:PROBE_NO_IFLUSH = '1'
+# Control: with the flush disabled the early line is read, so the case above can fail.
+Invoke-Case 'CONTROL no iflush reads type-ahead' 'cmd.exe' "/d /c $probe" 'Password:' $typed @('RESULT len=10 exact=false') @() $true 90000 'READY' "EARLYTYPED`r"
+Remove-Item Env:PROBE_NO_IFLUSH
+Remove-Item Env:PROBE_DELAY
+
+# --password-stdin through real pipes from each shell.
+function Invoke-Pipe($name, $shellFile, $shellArgs, $expectHex, $mustSee, $required) {
+  $env:EXPECT_HEX = $expectHex
+  try { $out = & $shellFile @shellArgs 2>&1 | Out-String } catch { $out = "EXCEPTION: $_" }
+  "===== PIPE: $name"
+  $out
+  $ok = $true
+  foreach ($s in $mustSee) { if (-not $out.Contains($s)) { "MISSING: $s"; $ok = $false } }
+  "RESULT[$name]: " + $(if ($ok) { 'PASS' } else { 'FAIL' })
+  if (-not $ok -and $required) { $script:failures += $name }
+}
+$pipeProbe = 'bundle exec ruby probe\pipe_probe.rb'
+$asciiHex = '20747970656420534543524554 20'.Replace(' ', '')   # ' typed SECRET '
+$utf8Hex = '2070c3a4737377c3b672642020'                       # ' paesswoerd  ' with real umlauts
+$umlautPw = ' p' + [char]0xE4 + 'ssw' + [char]0xF6 + 'rd  '
+Invoke-Pipe 'Windows PowerShell 5.1 ASCII (BOM stripped)' 'powershell.exe' @('-NoProfile', '-Command', "' typed SECRET ' | $pipeProbe") $asciiHex @('exact=true') $true
+Invoke-Pipe 'Windows PowerShell 5.1 non-ASCII (documented loss)' 'powershell.exe' @('-NoProfile', '-Command', "`$env:PASSWORD = '$umlautPw'; `$env:PASSWORD | $pipeProbe") $utf8Hex @('PIPE got=') $false
+$env:PASSWORD = $umlautPw
+Invoke-Pipe 'pwsh 7 help example ($env:PASSWORD | ...)' 'pwsh.exe' @('-NoProfile', '-Command', "`$env:PASSWORD | $pipeProbe") $utf8Hex @('exact=true') $true
+Remove-Item Env:PASSWORD
+Invoke-Pipe 'cmd echo pipe (report only)' 'cmd.exe' @('/d', '/c', "echo  typed SECRET | $pipeProbe") $asciiHex @('PIPE got=') $false
+
 # Full lich.rbw path, report-only: startup on a CI Ruby may stop earlier for
 # unrelated gem-check reasons. The seeded account makes -aa stop at "already
 # exists" before it would authenticate.
 New-Item -ItemType Directory -Force (Join-Path $repo 'data') | Out-Null
 Set-Content -Path (Join-Path $repo 'data\entry.yaml') -Value "encryption_mode: plaintext`naccounts:`n  ZZTEST:`n    password: x`n    characters: []"
-Invoke-Case 'lich.rbw -aa via cmd' 'cmd.exe' '/d /c bundle exec ruby lich.rbw -aa zztest --no-gtk' 'Password:' "typed-LICH-secret`r" @('Password:', 'already exists') @('typed-LICH-secret') $false 150000
+Invoke-Case 'lich.rbw -aa via cmd' 'cmd.exe' '/d /c bundle exec ruby lich.rbw --no-gtk -aa zztest' 'Password:' "typed-LICH-secret`r" @('Password:', 'already exists') @('typed-LICH-secret') $false 150000
+$missingLog = Join-Path $repo 'temp\lich5-missing-gems.log'
+if (Test-Path $missingLog) { '----- lich5-missing-gems.log'; Get-Content $missingLog -Tail 40 }
 $debugLog = Get-ChildItem (Join-Path $repo 'temp') -Filter 'debug-*.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1
 if ($debugLog) { "----- newest debug log: $($debugLog.Name)"; Get-Content $debugLog.FullName -Tail 40 } else { '----- no temp/debug-*.log written' }
 Get-ChildItem (Join-Path $repo 'temp') -ErrorAction SilentlyContinue | Select-Object Name, Length | Format-Table | Out-String
