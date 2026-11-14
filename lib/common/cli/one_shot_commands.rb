@@ -7,10 +7,10 @@ module Lich
       # a session: the account and data commands CLIOrchestration dispatches,
       # and the session queries ActiveSessionsQuery answers.
       #
-      # Has no dependencies, so the gem-recovery code can load it before any
-      # gem is available. Recovery uses it to avoid relaunching these commands
-      # after a gem repair: the relaunch discards their output, and their
-      # arguments can carry passwords.
+      # Has no dependencies, so GemCheck can load it before any gem is
+      # available. GemCheck uses it to avoid relaunching these commands after a
+      # gem repair: the relaunch discards their output, and their arguments can
+      # carry passwords.
       module OneShotCommands
         # Flag => CLIOrchestration handler method. CLIOrchestration.execute
         # dispatches from this table, so the recovery check and the dispatcher
@@ -34,13 +34,28 @@ module Lich
           '--web-login-test'          => :handle_web_login_test
         }.freeze
 
-        # Session queries answered by ActiveSessionsQuery before dispatch.
-        SESSION_QUERY = /\A--(?:active-sessions|session-info(?:=.*)?)\z/m.freeze
+        # Inline form of the session-info query: --session-info=NAME.
+        SESSION_INFO_PREFIX = '--session-info='
+
+        # The one rule for "this command line asks a session query".
+        # ActiveSessionsQuery.query_requested? calls it, so the query that
+        # runs and the recovery check cannot drift apart. A bare trailing
+        # --session-info (no name) is not a query: Lich starts a session.
+        #
+        # @param argv [Array<String>] the command line
+        # @return [Boolean] true when +argv+ asks a session query
+        def self.session_query?(argv)
+          return true if argv.include?('--active-sessions')
+          return true if argv.any? { |arg| arg.start_with?(SESSION_INFO_PREFIX) }
+
+          idx = argv.index('--session-info')
+          !idx.nil? && !argv[idx + 1].nil?
+        end
 
         # @param argv [Array<String>] the command line
         # @return [Boolean] true when +argv+ runs a one-shot command
         def self.present?(argv)
-          argv.any? { |arg| HANDLERS.key?(arg) || SESSION_QUERY.match?(arg) }
+          argv.any? { |arg| HANDLERS.key?(arg) } || session_query?(argv)
         end
       end
     end

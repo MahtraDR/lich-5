@@ -14,7 +14,6 @@ require 'timeout'
 require 'tmpdir'
 require 'uri'
 require_relative 'recovery_unit_policy'
-require_relative 'common/cli/one_shot_commands'
 
 module Lich
   # Restores approved runtime gems from the Ruby4Lich5 manifest when an
@@ -139,12 +138,16 @@ module Lich
     # @param powershell_runner [#call, nil] test seam for the Windows extractor
     # @param windows_process_api [#open, #wait, #close] test seam for the
     #   kernel32 calls that wait for Lich to exit
+    # @param relaunch [Boolean] whether a deferred replacement relaunches Lich
+    #   with its original arguments; GemCheck passes false for a one-shot
+    #   command (see GemCheck.relaunch_after_repair?)
     def initialize(manifest_url: ENV.fetch('LICH_GEM_MANIFEST_URL', DEFAULT_MANIFEST_URL),
                    gem_home: Gem.dir, temp_dir: (defined?(TEMP_DIR) ? TEMP_DIR : Dir.tmpdir),
                    http_get: nil, install_gem: nil, extract_zip: nil, powershell_runner: nil,
                    helper_launcher: nil, lich_version: (defined?(LICH_VERSION) ? LICH_VERSION : nil),
-                   windows_process_api: WindowsProcessApi)
+                   windows_process_api: WindowsProcessApi, relaunch: true)
       @windows_process_api = windows_process_api
+      @relaunch = relaunch
       @lich_version = lich_version
       @manifest_url = manifest_url
       @gem_home = gem_home
@@ -249,11 +252,12 @@ module Lich
     end
 
     # Runs in a detached Ruby process after the original Lich process exits.
-    # The payload contains only already-hash-verified package paths and the
-    # original Lich invocation; artifacts are re-verified before replacement.
+    # The payload contains only already-hash-verified package paths and, for
+    # a session, the original Lich invocation to relaunch (nil for a one-shot
+    # command); artifacts are re-verified before replacement.
     #
     # @param payload_path [String] JSON transaction description
-    # @return [Boolean] whether the replacement and restart succeeded
+    # @return [Boolean] whether the replacement (and relaunch, if any) succeeded
     def self.run_windows_replacement(payload_path)
       payload = JSON.parse(File.read(payload_path))
       recovery = new(gem_home: payload.fetch('gem_home'), temp_dir: payload.fetch('temp_dir'))
@@ -622,14 +626,14 @@ module Lich
       raise Error, "Could not start the hidden native gem replacement helper: #{e.message}"
     end
 
-    # What the helper relaunches once the replacement is done, or nil for a
-    # one-shot command: its relaunch would run with output discarded, and its
-    # arguments can carry passwords that would otherwise be written into the
-    # payload. GemCheck.exit_after_scheduled_repair! tells the user to rerun it.
+    # What the helper relaunches once the replacement is done, or nil when
+    # GemCheck asked for no relaunch (a one-shot command: its relaunch would
+    # run with output discarded, and its arguments can carry passwords that
+    # would otherwise be written into the payload).
     #
     # @return [Hash, nil] program, argv and chdir for the relaunch
     def restart_target
-      return nil if Lich::Common::CLI::OneShotCommands.present?(ARGV)
+      return nil unless @relaunch
 
       { 'program' => File.expand_path($PROGRAM_NAME), 'argv' => ARGV, 'chdir' => Dir.pwd }
     end
