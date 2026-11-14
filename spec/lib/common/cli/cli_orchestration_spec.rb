@@ -34,6 +34,8 @@ RSpec.describe Lich::Common::CLI::CLIOrchestration do
 
         def tty? = true
 
+        def iflush; end
+
         # A prompt passed here would go to $stderr, which Lich points at
         # the debug log, so callers must print their own and pass none.
         def getpass(prompt = nil)
@@ -89,6 +91,21 @@ RSpec.describe Lich::Common::CLI::CLIOrchestration do
         expect(run_add_account(['-aa', 'DOUG', 'secret'], stdin: untouched_stdin)).to eq(0)
         expect(cli_password).to have_received(:add_account).with('DOUG', 'secret', nil, prompt_frontend: true)
         expect_deprecation_warning
+      end
+
+      it 'says the word after ACCOUNT was read as PASSWORD when it is an option' do
+        expect(run_add_account(['-aa', 'DOUG', '--no-gui'], stdin: untouched_stdin)).to eq(0)
+        expect(cli_password).to have_received(:add_account).with('DOUG', '--no-gui', nil, prompt_frontend: true)
+        expect($stdout.string).to include('The word right after ACCOUNT was read as PASSWORD')
+        expect($stdout.string).to include('Put any other option before --add-account')
+        expect($stdout.string).not_to include('--no-gui')
+      end
+
+      it 'exits 1 without adding the account when PASSWORD is empty' do
+        expect(run_add_account(['-aa', 'DOUG', ''], stdin: untouched_stdin)).to eq(1)
+        expect($stdout.string).to include('error: Password cannot be empty')
+        expect(cli_password).not_to have_received(:add_account)
+        expect(untouched_stdin.pos).to eq(0)
       end
 
       it 'never echoes the password in the warning or on stdout' do
@@ -233,6 +250,14 @@ RSpec.describe Lich::Common::CLI::CLIOrchestration do
         expect($stdout.string).to include('--password-stdin')
         expect(cli_password).not_to have_received(:add_account)
       end
+
+      it 'prints a usage line without a PASSWORD argument' do
+        run_add_account(['-aa', 'DOUG'], stdin: StringIO.new("unrelated bytes\n"))
+
+        expect($stdout.string).to include('--add-account ACCOUNT [--password-stdin] [--frontend FRONTEND]')
+        expect($stdout.string).to include('-aa ACCOUNT [--password-stdin] [--frontend FRONTEND]')
+        expect($stdout.string).not_to match(/(?:--add-account|-aa) ACCOUNT PASSWORD/)
+      end
     end
 
     it 'exits 1 without converting legacy entries or adding the account when --frontend is invalid' do
@@ -251,6 +276,25 @@ RSpec.describe Lich::Common::CLI::CLIOrchestration do
     it 'exits 1 when ACCOUNT is missing' do
       expect(run_add_account(['-aa'], stdin: StringIO.new)).to eq(1)
       expect(cli_password).not_to have_received(:add_account)
+    end
+  end
+
+  describe 'POSITIONAL_PASSWORD_REMOVAL' do
+    # Release tripwire: the deprecation warning tells users the positional
+    # password stops working in this release. Read from lib/version.rb, the
+    # file release-please bumps, so the release PR for that version (or one of
+    # its prereleases) fails here until the removal has landed or the date
+    # has been moved on purpose.
+    it 'is later than the Lich version being built' do
+      version_file = File.expand_path('../../../../lib/version.rb', __dir__)
+      lich_version = File.read(version_file)[/^LICH_VERSION = '([^']+)'/, 1]
+      removal = described_class::POSITIONAL_PASSWORD_REMOVAL
+
+      message = "Lich #{lich_version} reaches POSITIONAL_PASSWORD_REMOVAL (#{removal}): make a password on the " \
+                '--add-account command line an error and retire positional_add_account_password, or move the ' \
+                'constant to a later release and update the warning'
+
+      expect(Gem::Version.new(lich_version).release).to be < Gem::Version.new(removal), message
     end
   end
 

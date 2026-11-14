@@ -506,6 +506,20 @@ RSpec.describe Lich::Common::Authentication::CLIPassword do
         .with(anything, 'DOUG', 'password', [hash_including(frontend: 'stormfront')])
     end
 
+    it 'asks for the frontend when prompt_frontend is true and none is known' do
+      allow(Lich::Common::Authentication).to receive(:authenticate)
+        .and_return([{ char_name: 'Newchar', game_code: 'DR', game_name: 'DragonRealms' }])
+      allow(Lich::Common::Authentication::CLIPassword).to receive(:prompt_for_frontend).and_return('wizard')
+      allow(Lich::Common::GUI::AccountManager).to receive(:add_or_update_account).and_return(true)
+      allow(Lich::Common::GUI::AccountManager).to receive(:convert_auth_data_to_characters).and_call_original
+
+      expect(Lich::Common::Authentication::CLIPassword.add_account('DOUG', 'password', nil, prompt_frontend: true)).to eq(0)
+
+      expect(Lich::Common::Authentication::CLIPassword).to have_received(:prompt_for_frontend).once
+      expect(Lich::Common::GUI::AccountManager).to have_received(:add_or_update_account)
+        .with(anything, 'DOUG', 'password', [hash_including(frontend: 'wizard')])
+    end
+
     it 'still uses an explicit frontend when prompt_frontend is false' do
       allow(Lich::Common::Authentication).to receive(:authenticate)
         .and_return([{ char_name: 'Newchar', game_code: 'DR', game_name: 'DragonRealms' }])
@@ -526,18 +540,26 @@ RSpec.describe Lich::Common::Authentication::CLIPassword do
     # it without the line ending, or nil at end-of-input.
     let(:terminal) do
       Class.new do
-        attr_reader :prompts
+        attr_reader :prompts, :events
 
-        def initialize(line)
+        def initialize(line, output = nil)
           @line = line
+          @output = output
           @prompts = []
+          @events = []
         end
 
         def tty? = true
 
+        # Discards type-ahead; records how much of the prompt was shown by then.
+        def iflush
+          @events << [:iflush, @output&.string.to_s.dup]
+        end
+
         # A prompt passed here would go to $stderr, which Lich points at
         # the debug log, so callers must print their own and pass none.
         def getpass(prompt = nil)
+          @events << [:getpass, @output&.string.to_s.dup]
           @prompts << prompt
           @line
         end
@@ -549,6 +571,44 @@ RSpec.describe Lich::Common::Authentication::CLIPassword do
     end
 
     let(:output) { StringIO.new }
+
+    it 'discards type-ahead before showing the prompt, then reads' do
+      tty = terminal.new('typed', output)
+
+      described_class.read_secret('Password: ', from_stdin: false, input: tty, output: output)
+
+      expect(tty.events).to eq([[:iflush, ''], [:getpass, 'Password: ']])
+    end
+
+    # U+FEFF and a non-ASCII letter, built from code points: the
+    # AsciiOnlySource cop rejects them as literals or escapes.
+    let(:bom) { [0xFEFF].pack('U') }
+    let(:a_umlaut) { [0xE4].pack('U') }
+
+    it 'removes a UTF-8 byte-order mark that Windows PowerShell 5.1 puts in front of a piped line' do
+      pipe = StringIO.new("#{bom} secret \r\n".b)
+
+      expect(described_class.read_secret('Password: ', from_stdin: true, input: pipe).b).to eq(' secret '.b)
+    end
+
+    it 'removes the byte-order mark from a UTF-8 tagged line, and only one of them' do
+      pipe = StringIO.new("#{bom}#{bom}p#{a_umlaut}ss\n")
+
+      secret = described_class.read_secret('Password: ', from_stdin: true, input: pipe)
+      expect(secret).to eq("#{bom}p#{a_umlaut}ss")
+      expect(secret.encoding).to eq(Encoding::UTF_8)
+    end
+
+    it 'keeps a byte-order mark that is not at the start' do
+      pipe = StringIO.new("pw#{bom}\n")
+
+      expect(described_class.read_secret('Password: ', from_stdin: true, input: pipe)).to eq("pw#{bom}")
+    end
+
+    it 'treats a line that is only a byte-order mark as empty' do
+      expect { described_class.read_secret('Password: ', from_stdin: true, input: StringIO.new("#{bom}\n")) }
+        .to raise_error(described_class::SecretInputError, /cannot be empty/)
+    end
 
     it 'reads from a terminal with getpass, keeping surrounding spaces' do
       tty = terminal.new('  a b  ')
@@ -621,25 +681,38 @@ RSpec.describe Lich::Common::Authentication::CLIPassword do
     end
 
     it 'shows the prompt on a real terminal even when $stderr is redirected, as Lich does' do
+      original_stderr = $stderr
+      original_stdin = $stdin
       begin
         require 'pty'
-        require 'io/console'
       rescue LoadError
         skip 'needs a pseudo-terminal'
       end
       master, slave = PTY.open
-      original_stderr = $stderr
       $stderr = StringIO.new
-      # Typed ahead: the line discipline holds it until getpass reads.
+      # Lich reads $stdin, and io-console only diverts getpass's prompt to
+      # $stderr when the receiver is $stdin, so the terminal has to be $stdin.
+      $stdin = slave
+      # Typed before the prompt appears: it must be discarded, not used.
+      master.write("early\n")
+      IO.select([slave], nil, nil, 2)
+
+      reader = Thread.new { described_class.read_secret('Password: ', from_stdin: false, output: slave) }
+      shown = +''
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 5
+      until shown.include?('Password: ') || Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+        shown << master.read_nonblock(4096) if master.wait_readable(0.1)
+      end
+      expect(shown).to include('Password: ')
       master.write("pw\n")
 
-      expect(described_class.read_secret('Password: ', from_stdin: false, input: slave, output: slave)).to eq('pw')
-      expect($stderr.string).to be_empty
-      shown = +''
-      shown << master.read_nonblock(4096) while master.wait_readable(0.5) && !shown.include?('Password: ')
-      expect(shown).to include('Password: ')
+      expect(reader.join(5)&.value).to eq('pw')
+      # io-console writes its closing newline to $stderr; the prompt must not go there.
+      expect($stderr.string).not_to include('Password: ')
     ensure
+      reader&.kill
       $stderr = original_stderr
+      $stdin = original_stdin
       [master, slave].each { |io| io.close if io && !io.closed? }
     end
 

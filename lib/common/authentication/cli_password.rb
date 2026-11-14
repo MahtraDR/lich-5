@@ -26,7 +26,9 @@ module Lich
         #
         # With +from_stdin+ (the caller saw --password-stdin) one line is read
         # from +input+ and only its line ending is removed, so leading and
-        # trailing spaces are kept as the GUI keeps them. Without it, the
+        # trailing spaces are kept as the GUI keeps them. A leading UTF-8
+        # byte-order mark is removed too: Windows PowerShell 5.1 puts one in
+        # front of everything it pipes to a native program. Without it, the
         # secret is only read from a terminal, with echo off: a pipe is never
         # taken as a secret unless the caller asked for that, because a
         # launcher or wrapper that leaves stdin attached to something else
@@ -52,7 +54,7 @@ module Lich
           secret = if input.tty?
                      read_hidden_line(prompt, input, output)
                    else
-                     input.gets&.chomp
+                     strip_byte_order_mark(input.gets&.chomp)
                    end
           raise SecretInputError, 'Unable to read password from STDIN / terminal' if secret.nil?
           # Matches the GUI's Add Account tab, which refuses an empty password
@@ -71,6 +73,10 @@ module Lich
         # @return [String, nil] the line without its line ending, or nil at end-of-input
         def self.read_hidden_line(prompt, input, output)
           require 'io/console'
+          # Echo only goes off inside getpass, so anything typed or pasted
+          # during startup was shown on screen. Discard it, as getpass(3) does,
+          # rather than take a password the terminal has already displayed.
+          input.iflush
           output.print prompt
           output.flush
           input.getpass
@@ -79,6 +85,24 @@ module Lich
           output.puts
         end
         private_class_method :read_hidden_line
+
+        # The UTF-8 encoding of U+FEFF, the byte-order mark. Built from bytes:
+        # the AsciiOnlySource cop would autocorrect the escaped literal away.
+        UTF8_BYTE_ORDER_MARK = [0xEF, 0xBB, 0xBF].pack('C*').freeze
+        private_constant :UTF8_BYTE_ORDER_MARK
+
+        # @api private
+        # Removes one leading UTF-8 byte-order mark. Compared byte for byte, so
+        # it works whatever encoding Ruby tagged the piped line with.
+        #
+        # @param line [String, nil] a line read from a pipe
+        # @return [String, nil] +line+ without a leading byte-order mark
+        def self.strip_byte_order_mark(line)
+          return line unless line&.b&.start_with?(UTF8_BYTE_ORDER_MARK)
+
+          line.byteslice(UTF8_BYTE_ORDER_MARK.bytesize..)
+        end
+        private_class_method :strip_byte_order_mark
 
         # Changes account password in entry.yaml
         # Handles all encryption modes (plaintext, standard, enhanced)

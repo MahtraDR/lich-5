@@ -103,6 +103,13 @@ module Lich
             $stdout.puts usage
             exit 1
           end
+          # Refused like an empty prompt or piped line (CLIPassword.read_secret),
+          # so `-aa NAME "$PW"` with PW unset never sends an empty password.
+          if positional_password && positional_password.empty?
+            $stdout.puts 'error: Password cannot be empty'
+            $stdout.puts usage
+            exit 1
+          end
 
           # Validated before the password is read and before the legacy conversion
           # below, so a malformed command exits without prompting or writing
@@ -123,6 +130,10 @@ module Lich
                          'and visible to other users in the process list.'
             $stdout.puts "warning: It will be an error starting with Lich #{POSITIONAL_PASSWORD_REMOVAL}. " \
                          'Leave PASSWORD off to be prompted for it, or pipe it in with --password-stdin.'
+            # `-aa NAME --no-gui` lands here too: the slot after ACCOUNT is read
+            # as PASSWORD whatever it holds. Say so without echoing it.
+            $stdout.puts 'warning: The word right after ACCOUNT was read as PASSWORD. ' \
+                         'Put any other option before --add-account.'
             password = positional_password
           else
             begin
