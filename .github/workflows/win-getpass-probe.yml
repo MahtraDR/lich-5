@@ -4,7 +4,7 @@ name: win-getpass-probe
 
 on:
   push:
-    branches: [probe/win-getpass, probe/win-getpass-r2]
+    branches: [probe/win-getpass, probe/win-getpass-r2, probe/win-getpass-r3]
 
 permissions:
   contents: read
@@ -33,6 +33,10 @@ jobs:
           ruby -v
           ruby -rio/console -e "puts 'io-console ' + (Gem.loaded_specs['io-console']&.version&.to_s || IO::ConsoleMode.class.name rescue 'default')"
           [Environment]::OSVersion.VersionString
+      - name: Pipes from each shell
+        shell: pwsh
+        run: ./probe/pipes.ps1
       - name: Drive a real console
+        if: always()
         shell: pwsh
         run: ./probe/console_drive.ps1
