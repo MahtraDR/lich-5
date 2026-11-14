@@ -4,7 +4,7 @@ name: win-getpass-probe
 
 on:
   push:
-    branches: [probe/win-getpass]
+    branches: [probe/win-getpass, probe/win-getpass-r2]
 
 permissions:
   contents: read
